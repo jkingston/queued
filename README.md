@@ -1,5 +1,9 @@
 # Queued
 
+[![CI](https://github.com/jkingston/queued/actions/workflows/ci.yml/badge.svg)](https://github.com/jkingston/queued/actions/workflows/ci.yml)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
 A TUI SFTP download manager. Browse remote files, queue downloads, and watch transfer progress - all from your terminal.
 
 ## Features
@@ -98,6 +102,16 @@ Settings are stored in `~/.config/queued/settings.json`:
 ```
 
 Recent hosts are cached in `~/.cache/queued/hosts.json` for quick reconnection.
+
+## Development
+
+```bash
+git clone https://github.com/jkingston/queued
+cd queued
+uv sync
+uv run pytest
+uv run ruff check src/
+```
 
 ## License
 
