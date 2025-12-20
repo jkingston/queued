@@ -1,7 +1,8 @@
 """Mock SFTP client for testing without network."""
 
+from collections.abc import Callable
 from datetime import datetime
-from typing import Callable, Optional
+from typing import Optional
 
 from queued.models import Host, RemoteFile
 

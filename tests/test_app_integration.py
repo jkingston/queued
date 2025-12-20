@@ -1,6 +1,5 @@
 """Integration tests for Queued app."""
 
-import pytest
 from textual.app import App, ComposeResult
 
 from queued.widgets.file_browser import FileBrowser

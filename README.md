@@ -17,26 +17,26 @@ A TUI SFTP download manager. Browse remote files, queue downloads, and watch tra
 
 ```bash
 # Run directly from GitHub
-uvx --from git+https://github.com/jack/queued queued user@server.example.com
+uvx --from git+https://github.com/jkingston/queued queued user@server.example.com
 
 # Or install globally
-uv tool install git+https://github.com/jack/queued
+uv tool install git+https://github.com/jkingston/queued
 ```
 
 ### With Nix
 
 ```bash
 # Run directly
-nix run github:jack/queued -- user@server.example.com
+nix run github:jkingston/queued -- user@server.example.com
 
 # Install to profile
-nix profile install github:jack/queued
+nix profile install github:jkingston/queued
 ```
 
 ### From source
 
 ```bash
-git clone https://github.com/jack/queued
+git clone https://github.com/jkingston/queued
 cd queued
 uv sync
 uv run queued

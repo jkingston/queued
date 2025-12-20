@@ -56,8 +56,12 @@ ignore = [
     "SIM102",  # Use single if - sometimes nested is clearer
     "SIM105",  # Use contextlib.suppress - try/except is clearer
     "SIM108",  # Use ternary - if/else is clearer for multi-line
+    "SIM117",  # Nested with - clearer for tests with temp dirs
     "UP045",   # Optional[X] -> X | None - keep for compatibility
 ]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["UP035"]  # Allow typing imports for test clarity
 
 [tool.ruff.format]
 quote-style = "double"

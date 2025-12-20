@@ -156,7 +156,9 @@ class TestFileBrowserCursor:
     """Tests for cursor behavior in FileBrowser."""
 
     @pytest.fixture
-    def browser_with_files(self, mock_files: list[RemoteFile]) -> tuple[FileBrowser, MockSFTPClient]:
+    def browser_with_files(
+        self, mock_files: list[RemoteFile]
+    ) -> tuple[FileBrowser, MockSFTPClient]:
         """Create a FileBrowser with mock SFTP client."""
         sftp = MockSFTPClient(mock_files)
         browser = FileBrowser(sftp_client=sftp)
@@ -207,7 +209,9 @@ class TestFileBrowserSelections:
     """Tests for selection behavior in FileBrowser."""
 
     @pytest.fixture
-    def browser_with_files(self, mock_files: list[RemoteFile]) -> tuple[FileBrowser, MockSFTPClient]:
+    def browser_with_files(
+        self, mock_files: list[RemoteFile]
+    ) -> tuple[FileBrowser, MockSFTPClient]:
         """Create a FileBrowser with mock SFTP client."""
         sftp = MockSFTPClient(mock_files)
         browser = FileBrowser(sftp_client=sftp)
@@ -321,15 +325,15 @@ class TestFileBrowserNavigation:
     """Tests for navigation in FileBrowser."""
 
     @pytest.fixture
-    def browser_with_files(self, mock_files: list[RemoteFile]) -> tuple[FileBrowser, MockSFTPClient]:
+    def browser_with_files(
+        self, mock_files: list[RemoteFile]
+    ) -> tuple[FileBrowser, MockSFTPClient]:
         """Create a FileBrowser with mock SFTP client."""
         sftp = MockSFTPClient(mock_files)
         browser = FileBrowser(sftp_client=sftp)
         return browser, sftp
 
-    async def test_go_up_from_subdir(
-        self, browser_with_files: tuple[FileBrowser, MockSFTPClient]
-    ):
+    async def test_go_up_from_subdir(self, browser_with_files: tuple[FileBrowser, MockSFTPClient]):
         """Go up should navigate to parent directory."""
         browser, sftp = browser_with_files
         await sftp.connect()
