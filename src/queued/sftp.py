@@ -95,7 +95,7 @@ class SFTPClient:
                 connect_kwargs["password"] = self.host.password
                 logger.debug("Using password authentication")
 
-            self._conn = await asyncssh.connect(**connect_kwargs)
+            self._conn = await asyncssh.connect(**connect_kwargs, connect_timeout=30)
             self._sftp = await self._conn.start_sftp_client()
             self._connected = True
             logger.info("Connected to %s", self.host.host_key)

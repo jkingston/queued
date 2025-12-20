@@ -2,12 +2,19 @@
 
 import json
 import logging
+import os
 from datetime import datetime
 from pathlib import Path
 
 from queued.models import AppSettings, Host, Transfer, TransferStatus
 
 logger = logging.getLogger(__name__)
+
+
+def _secure_write(path: Path, content: str) -> None:
+    """Write file with secure permissions (0600)."""
+    path.write_text(content)
+    os.chmod(path, 0o600)
 
 
 def get_cache_dir() -> Path:
@@ -45,7 +52,7 @@ class HostCache:
     def _save(self) -> None:
         """Save hosts to cache file."""
         data = {"hosts": [h.to_dict() for h in self._hosts]}
-        self.cache_file.write_text(json.dumps(data, indent=2))
+        _secure_write(self.cache_file, json.dumps(data, indent=2))
 
     def add(self, host: Host) -> None:
         """Add or update a host in the cache."""
@@ -99,7 +106,7 @@ class TransferStateCache:
 
     def _save(self) -> None:
         """Save transfer state to cache file."""
-        self.cache_file.write_text(json.dumps(self._state, indent=2))
+        _secure_write(self.cache_file, json.dumps(self._state, indent=2))
 
     def save_transfer(
         self,
@@ -172,7 +179,7 @@ class QueueCache:
             "queue_paused": queue_paused,
             "transfers": [t.to_dict() for t in active],
         }
-        self.cache_file.write_text(json.dumps(data, indent=2))
+        _secure_write(self.cache_file, json.dumps(data, indent=2))
 
     def load(self) -> tuple[list[Transfer], bool]:
         """Load saved queue.
@@ -224,7 +231,7 @@ class SettingsManager:
 
     def _save(self) -> None:
         """Save settings to config file."""
-        self.config_file.write_text(json.dumps(self._settings.to_dict(), indent=2))
+        _secure_write(self.config_file, json.dumps(self._settings.to_dict(), indent=2))
         logger.debug("Saved settings to %s", self.config_file)
 
     @property

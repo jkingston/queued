@@ -9,7 +9,7 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Container, Horizontal, Vertical
 from textual.screen import ModalScreen
-from textual.widgets import Button, Footer, Header, Input, Label
+from textual.widgets import Button, Checkbox, Footer, Header, Input, Label
 
 from queued.config import HostCache, QueueCache, SettingsManager
 from queued.models import Host, RemoteFile, Transfer
@@ -342,6 +342,11 @@ class ConnectionScreen(ModalScreen[Optional[Host]]):
         margin-bottom: 0;
     }
 
+    ConnectionScreen Checkbox {
+        margin-top: 1;
+        margin-bottom: 0;
+    }
+
     ConnectionScreen .button-row {
         margin-top: 1;
         height: auto;
@@ -377,6 +382,7 @@ class ConnectionScreen(ModalScreen[Optional[Host]]):
 
             yield Label("Password (if no key):", classes="field-label")
             yield Input(placeholder="", id="password-input", password=True)
+            yield Checkbox("Save password", id="save-password-checkbox")
 
             with Horizontal(classes="button-row"):
                 yield Button("Connect", variant="primary", id="connect-btn")
@@ -406,6 +412,7 @@ class ConnectionScreen(ModalScreen[Optional[Host]]):
             self.query_one("#key-input", Input).value = host.key_path
         if host.password:
             self.query_one("#password-input", Input).value = host.password
+            self.query_one("#save-password-checkbox", Checkbox).value = True
         self.query_one("#password-input", Input).focus()
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
@@ -418,6 +425,7 @@ class ConnectionScreen(ModalScreen[Optional[Host]]):
         port_input = self.query_one("#port-input", Input)
         key_input = self.query_one("#key-input", Input)
         password_input = self.query_one("#password-input", Input)
+        save_password = self.query_one("#save-password-checkbox", Checkbox)
 
         host_str = host_input.value.strip()
         if not host_str:
@@ -434,6 +442,8 @@ class ConnectionScreen(ModalScreen[Optional[Host]]):
 
         host = Host.from_string(host_str, port=port, key_path=key_path)
         host.password = password
+        # Mark whether password should be saved (temporary attribute)
+        host._save_password = save_password.value
         self.dismiss(host)
 
     def action_cancel(self) -> None:
@@ -484,7 +494,6 @@ class QueuedApp(App):
         Binding("q", "quit", "Quit", show=True),
         Binding("?", "help", "Help", show=True),
         Binding("d", "download", "Download", show=True),
-        Binding("u", "upload", "Upload", show=True),
         Binding("s", "stop_all", "Stop All", show=True),
         Binding("r", "resume_all", "Resume All", show=True),
         Binding("o", "options", "Options", show=True),
@@ -551,6 +560,9 @@ class QueuedApp(App):
         self.sftp = SFTPClient(host)
         try:
             await self.sftp.connect()
+            # Clear password before saving if user didn't want to save it
+            if not getattr(host, "_save_password", True):
+                host.password = None
             self.host_cache.add(host)
 
             # Add connection to the pool for multi-server support
@@ -789,11 +801,6 @@ class QueuedApp(App):
         files = file_browser.queue_selected()
         if files:
             self._queue_downloads(files)
-
-    def action_upload(self) -> None:
-        """Upload action - not yet implemented."""
-        status_bar = self.query_one("#status-bar", StatusBar)
-        status_bar.show_message("Upload: Select local file (not yet implemented)")
 
     def action_stop_all(self) -> None:
         """Stop all queue processing - no new downloads will start."""
