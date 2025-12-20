@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
@@ -14,6 +15,8 @@ from queued.models import Host, RemoteFile
 
 if TYPE_CHECKING:
     from queued.config import HostCache
+
+logger = logging.getLogger(__name__)
 
 
 class SFTPError(Exception):
@@ -70,6 +73,9 @@ class SFTPClient:
 
     async def connect(self) -> None:
         """Establish connection to the remote host."""
+        logger.debug(
+            "Connecting to %s@%s:%d", self.host.username, self.host.hostname, self.host.port
+        )
         try:
             # Use system known_hosts file for host key verification
             known_hosts_path = Path.home() / ".ssh" / "known_hosts"
@@ -84,12 +90,15 @@ class SFTPClient:
 
             if self.host.key_path:
                 connect_kwargs["client_keys"] = [self.host.key_path]
+                logger.debug("Using SSH key: %s", self.host.key_path)
             elif self.host.password:
                 connect_kwargs["password"] = self.host.password
+                logger.debug("Using password authentication")
 
             self._conn = await asyncssh.connect(**connect_kwargs)
             self._sftp = await self._conn.start_sftp_client()
             self._connected = True
+            logger.info("Connected to %s", self.host.host_key)
         except asyncssh.HostKeyNotVerifiable as e:
             raise SFTPError(
                 f"Host key verification failed: {e}. Add host to ~/.ssh/known_hosts"
@@ -101,6 +110,7 @@ class SFTPClient:
 
     async def disconnect(self) -> None:
         """Close the connection."""
+        logger.debug("Disconnecting from %s", self.host.host_key)
         if self._sftp:
             self._sftp.exit()
             self._sftp = None
@@ -109,12 +119,14 @@ class SFTPClient:
             await self._conn.wait_closed()
             self._conn = None
         self._connected = False
+        logger.info("Disconnected from %s", self.host.host_key)
 
     async def list_dir(self, path: str = ".") -> list[RemoteFile]:
         """List directory contents."""
         if not self._sftp:
             raise SFTPError("Not connected")
 
+        logger.debug("Listing directory: %s", path)
         try:
             entries = await self._sftp.readdir(path)
             files = []

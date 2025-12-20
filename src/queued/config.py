@@ -1,10 +1,13 @@
 """Configuration and host cache management."""
 
 import json
+import logging
 from datetime import datetime
 from pathlib import Path
 
 from queued.models import AppSettings, Host, Transfer, TransferStatus
+
+logger = logging.getLogger(__name__)
 
 
 def get_cache_dir() -> Path:
@@ -212,12 +215,17 @@ class SettingsManager:
             try:
                 data = json.loads(self.config_file.read_text())
                 self._settings = AppSettings.from_dict(data)
+                logger.debug("Loaded settings from %s", self.config_file)
             except (json.JSONDecodeError, KeyError):
                 self._settings = AppSettings()
+                logger.debug("Using default settings (config file invalid)")
+        else:
+            logger.debug("Using default settings (no config file)")
 
     def _save(self) -> None:
         """Save settings to config file."""
         self.config_file.write_text(json.dumps(self._settings.to_dict(), indent=2))
+        logger.debug("Saved settings to %s", self.config_file)
 
     @property
     def settings(self) -> AppSettings:

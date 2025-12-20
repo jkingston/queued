@@ -2,6 +2,7 @@
 
 import asyncio
 import hashlib
+import logging
 import re
 import uuid
 from collections.abc import Callable
@@ -19,6 +20,8 @@ from queued.models import (
     TransferStatus,
 )
 from queued.sftp import SFTPClient, SFTPConnectionPool, SFTPError
+
+logger = logging.getLogger(__name__)
 
 
 class TransferManager:
@@ -100,6 +103,7 @@ class TransferManager:
         self.queue.transfers.append(transfer)
         self._notify_status_change(transfer)
         self._persist_queue()
+        logger.info("Added download to queue: %s", remote_file.path)
         return transfer
 
     def _persist_queue(self) -> None:
@@ -164,6 +168,7 @@ class TransferManager:
 
     def _start_transfer(self, transfer: Transfer) -> None:
         """Start a single transfer."""
+        logger.debug("Starting transfer: %s", transfer.remote_path)
         transfer.status = TransferStatus.TRANSFERRING
         transfer.started_at = datetime.now()
         self._speed_trackers[transfer.id] = SpeedTracker()
@@ -232,11 +237,13 @@ class TransferManager:
             transfer.completed_at = datetime.now()
             self.state_cache.clear_transfer(transfer.id)
             self._persist_queue()
+            logger.info("Download completed: %s", transfer.remote_path)
 
         except SFTPError as e:
             transfer.status = TransferStatus.FAILED
             transfer.error = str(e)
             self._persist_queue()
+            logger.error("Download failed: %s - %s", transfer.remote_path, e)
         except asyncio.CancelledError:
             # Distinguish between queue stop and individual pause
             if self._queue_paused:
@@ -456,6 +463,7 @@ class TransferManager:
         Active transfers are marked as STOPPED (distinct from user-paused).
         Returns the count of transfers that were stopped.
         """
+        logger.info("Stopping queue processing")
         self._queue_paused = True
         count = 0
         for t in self.queue.transfers:
@@ -466,6 +474,7 @@ class TransferManager:
                 # Status will be set to STOPPED in CancelledError handler
                 count += 1
         self._persist_queue()
+        logger.debug("Stopped %d active transfers", count)
         return count
 
     def resume_queue(self) -> int:
@@ -475,6 +484,7 @@ class TransferManager:
         Only STOPPED transfers are resumed; PAUSED transfers remain paused.
         Returns the count of transfers that were set back to queued.
         """
+        logger.info("Resuming queue processing")
         self._queue_paused = False
         # Only resume STOPPED transfers, not user-PAUSED ones
         count = 0
@@ -484,6 +494,7 @@ class TransferManager:
                 self._notify_status_change(t)
                 count += 1
         self._persist_queue()
+        logger.debug("Resumed %d stopped transfers", count)
         return count
 
     @property

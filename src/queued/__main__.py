@@ -1,5 +1,6 @@
 """Entry point for Queued TUI SFTP download manager."""
 
+import logging
 import sys
 from pathlib import Path
 
@@ -9,12 +10,26 @@ from queued import __version__
 from queued.models import Host
 
 
+def setup_logging(verbose: bool) -> None:
+    """Configure logging based on verbosity level."""
+    if verbose:
+        logging.basicConfig(
+            level=logging.DEBUG,
+            format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+            datefmt="%H:%M:%S",
+        )
+    else:
+        # Suppress all logging in non-verbose mode
+        logging.basicConfig(level=logging.CRITICAL)
+
+
 @click.command()
 @click.argument("connection", required=False)
 @click.option("-p", "--port", default=22, help="SSH port (default: 22)")
 @click.option("-i", "--identity", help="Path to SSH private key")
 @click.option("-P", "--password", is_flag=True, help="Prompt for password authentication")
 @click.option("-d", "--download-dir", help="Download directory (default: ~/Downloads)")
+@click.option("-v", "--verbose", is_flag=True, help="Enable debug output")
 @click.option("--version", is_flag=True, help="Show version and exit")
 def main(
     connection: str | None,
@@ -22,6 +37,7 @@ def main(
     identity: str | None,
     password: bool,
     download_dir: str | None,
+    verbose: bool,
     version: bool,
 ) -> None:
     """Queued - TUI SFTP download manager.
@@ -60,6 +76,9 @@ def main(
         # Prompt for password if -P flag is used
         if password:
             host.password = click.prompt("Password", hide_input=True)
+
+    # Set up logging before starting app
+    setup_logging(verbose)
 
     # Import here to avoid slow startup for --version
     from queued.app import QueuedApp
