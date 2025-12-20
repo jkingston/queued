@@ -1,0 +1,541 @@
+"""Transfer queue manager with concurrent download support."""
+
+import asyncio
+import hashlib
+import re
+import uuid
+from datetime import datetime
+from pathlib import Path
+from typing import Callable, Optional
+
+from queued.config import QueueCache, TransferStateCache
+from queued.models import (
+    AppSettings,
+    Host,
+    RemoteFile,
+    Transfer,
+    TransferDirection,
+    TransferQueue,
+    TransferStatus,
+)
+from queued.sftp import SFTPClient, SFTPConnectionPool, SFTPError
+
+
+class TransferManager:
+    """Manages file transfers with queue, resume, and verification support."""
+
+    def __init__(
+        self,
+        sftp_client: Optional[SFTPClient] = None,
+        settings: Optional[AppSettings] = None,
+        on_progress: Optional[Callable[[Transfer], None]] = None,
+        on_status_change: Optional[Callable[[Transfer], None]] = None,
+        connection_pool: Optional[SFTPConnectionPool] = None,
+        queue_cache: Optional[QueueCache] = None,
+    ):
+        self.sftp = sftp_client  # Primary client for file browser operations
+        self.pool = connection_pool  # For multi-server downloads
+        self.settings = settings or AppSettings()
+        self.on_progress = on_progress
+        self.on_status_change = on_status_change
+
+        self.queue = TransferQueue(max_concurrent=self.settings.max_concurrent_transfers)
+        self.state_cache = TransferStateCache()
+        self.queue_cache = queue_cache or QueueCache()
+
+        self._running = False
+        self._queue_paused = False  # True when queue processing is stopped (s key)
+        self._tasks: dict[str, asyncio.Task] = {}
+        self._speed_trackers: dict[str, SpeedTracker] = {}
+
+        # Load any persisted transfers and queue state from previous session
+        transfers, queue_paused = self.queue_cache.load()
+        for transfer in transfers:
+            self.queue.transfers.append(transfer)
+        self._queue_paused = queue_paused
+
+    def add_download(
+        self,
+        remote_file: RemoteFile,
+        host: Optional[Host] = None,
+        local_dir: Optional[str] = None,
+    ) -> Optional[Transfer]:
+        """Add a file to the download queue.
+
+        Returns None if the file is already in the queue (duplicate prevention).
+        """
+        host_key = host.host_key if host else ""
+
+        # Check for duplicate - don't add if already in queue
+        if self.queue.is_queued(remote_file.path, host_key):
+            return None
+
+        if local_dir is None:
+            local_dir = str(Path(self.settings.download_dir).expanduser())
+
+        # Sanitize filename to prevent path traversal attacks
+        safe_name = Path(remote_file.name).name  # Extract just the filename
+        if not safe_name or safe_name in (".", ".."):
+            raise ValueError(f"Invalid filename: {remote_file.name}")
+
+        # Resolve paths and verify the target is under download directory
+        download_base = Path(local_dir).resolve()
+        local_path = (download_base / safe_name).resolve()
+
+        if not str(local_path).startswith(str(download_base)):
+            raise ValueError(f"Path traversal attempt blocked: {remote_file.name}")
+
+        local_path = str(local_path)
+
+        transfer = Transfer(
+            id=str(uuid.uuid4()),
+            remote_path=remote_file.path,
+            local_path=local_path,
+            direction=TransferDirection.DOWNLOAD,
+            size=remote_file.size,
+            host_key=host_key,
+            status=TransferStatus.QUEUED,
+        )
+
+        self.queue.transfers.append(transfer)
+        self._notify_status_change(transfer)
+        self._persist_queue()
+        return transfer
+
+    def _persist_queue(self) -> None:
+        """Save queue state to disk for persistence across restarts."""
+        self.queue_cache.save(self.queue.transfers, self._queue_paused)
+
+    async def _get_sftp_for_transfer(self, transfer: Transfer) -> SFTPClient:
+        """Get the appropriate SFTP client for a transfer."""
+        # If transfer has a host_key and we have a connection pool, use it
+        if transfer.host_key and self.pool:
+            return await self.pool.get_connection(transfer.host_key)
+        # Fall back to the primary SFTP client
+        if self.sftp and self.sftp.connected:
+            return self.sftp
+        raise SFTPError("No SFTP connection available for transfer")
+
+    def add_upload(self, local_path: str, remote_dir: str) -> Transfer:
+        """Add a file to the upload queue."""
+        local_file = Path(local_path)
+        if not local_file.exists():
+            raise FileNotFoundError(f"Local file not found: {local_path}")
+
+        remote_path = f"{remote_dir}/{local_file.name}"
+
+        transfer = Transfer(
+            id=str(uuid.uuid4()),
+            remote_path=remote_path,
+            local_path=str(local_file),
+            direction=TransferDirection.UPLOAD,
+            size=local_file.stat().st_size,
+            status=TransferStatus.QUEUED,
+        )
+
+        self.queue.transfers.append(transfer)
+        self._notify_status_change(transfer)
+        return transfer
+
+    async def start(self) -> None:
+        """Start processing the queue."""
+        self._running = True
+        while self._running:
+            # Only start new transfers if queue processing is not paused
+            if not self._queue_paused:
+                while self.queue.can_start_more:
+                    transfer = self.queue.get_next_queued()
+                    if transfer is None:
+                        break
+                    self._start_transfer(transfer)
+
+            await asyncio.sleep(0.1)
+
+    async def stop(self) -> None:
+        """Stop processing the queue and wait for tasks to finish."""
+        self._running = False
+        # Cancel all active transfers (copy list to avoid mutation during iteration)
+        tasks = list(self._tasks.values())
+        for task in tasks:
+            task.cancel()
+        # Wait for all tasks to complete
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+    def _start_transfer(self, transfer: Transfer) -> None:
+        """Start a single transfer."""
+        transfer.status = TransferStatus.TRANSFERRING
+        transfer.started_at = datetime.now()
+        self._speed_trackers[transfer.id] = SpeedTracker()
+        self._notify_status_change(transfer)
+
+        if transfer.direction == TransferDirection.DOWNLOAD:
+            task = asyncio.create_task(self._do_download(transfer))
+        else:
+            task = asyncio.create_task(self._do_upload(transfer))
+
+        self._tasks[transfer.id] = task
+
+    async def _do_download(self, transfer: Transfer) -> None:
+        """Execute a download."""
+        try:
+            # Get the appropriate SFTP connection for this transfer
+            sftp = await self._get_sftp_for_transfer(transfer)
+
+            # Check for resume
+            resume_offset = 0
+            if self.settings.resume_transfers:
+                resume_offset = self.state_cache.get_resume_offset(
+                    transfer.remote_path, transfer.local_path
+                )
+                if resume_offset > 0:
+                    transfer.bytes_transferred = resume_offset
+
+            def progress_callback(bytes_done: int, total: int) -> None:
+                transfer.bytes_transferred = bytes_done
+                speed_tracker = self._speed_trackers.get(transfer.id)
+                if speed_tracker:
+                    transfer.speed = speed_tracker.update(bytes_done)
+                self._notify_progress(transfer)
+
+                # Save state for resume
+                if self.settings.resume_transfers:
+                    self.state_cache.save_transfer(
+                        transfer.id,
+                        transfer.remote_path,
+                        transfer.local_path,
+                        bytes_done,
+                        total,
+                    )
+
+            await sftp.download(
+                transfer.remote_path,
+                transfer.local_path,
+                progress_callback=progress_callback,
+                resume_offset=resume_offset,
+                bandwidth_limit=self.settings.bandwidth_limit,
+            )
+
+            # Verify if checksums available
+            if self.settings.verify_checksums:
+                transfer.status = TransferStatus.VERIFYING
+                self._notify_status_change(transfer)
+                verified = await self._verify_checksum(transfer, sftp)
+                if not verified:
+                    transfer.status = TransferStatus.FAILED
+                    transfer.error = "Checksum verification failed"
+                    self._notify_status_change(transfer)
+                    self._persist_queue()
+                    return
+
+            transfer.status = TransferStatus.COMPLETED
+            transfer.completed_at = datetime.now()
+            self.state_cache.clear_transfer(transfer.id)
+            self._persist_queue()
+
+        except SFTPError as e:
+            transfer.status = TransferStatus.FAILED
+            transfer.error = str(e)
+            self._persist_queue()
+        except asyncio.CancelledError:
+            # Distinguish between queue stop and individual pause
+            if self._queue_paused:
+                transfer.status = TransferStatus.STOPPED
+            else:
+                transfer.status = TransferStatus.PAUSED
+            self._persist_queue()
+        except OSError as e:
+            transfer.status = TransferStatus.FAILED
+            transfer.error = f"I/O error: {e}"
+            self._persist_queue()
+        except ValueError as e:
+            transfer.status = TransferStatus.FAILED
+            transfer.error = f"Invalid data: {e}"
+            self._persist_queue()
+        finally:
+            self._tasks.pop(transfer.id, None)
+            self._speed_trackers.pop(transfer.id, None)
+            self._notify_status_change(transfer)
+
+    async def _do_upload(self, transfer: Transfer) -> None:
+        """Execute an upload."""
+        try:
+            # Get the appropriate SFTP connection for this transfer
+            sftp = await self._get_sftp_for_transfer(transfer)
+
+            def progress_callback(bytes_done: int, total: int) -> None:
+                transfer.bytes_transferred = bytes_done
+                speed_tracker = self._speed_trackers.get(transfer.id)
+                if speed_tracker:
+                    transfer.speed = speed_tracker.update(bytes_done)
+                self._notify_progress(transfer)
+
+            await sftp.upload(
+                transfer.local_path,
+                transfer.remote_path,
+                progress_callback=progress_callback,
+                bandwidth_limit=self.settings.bandwidth_limit,
+            )
+
+            transfer.status = TransferStatus.COMPLETED
+            transfer.completed_at = datetime.now()
+            self._persist_queue()
+
+        except SFTPError as e:
+            transfer.status = TransferStatus.FAILED
+            transfer.error = str(e)
+            self._persist_queue()
+        except asyncio.CancelledError:
+            # Distinguish between queue stop and individual pause
+            if self._queue_paused:
+                transfer.status = TransferStatus.STOPPED
+            else:
+                transfer.status = TransferStatus.PAUSED
+            self._persist_queue()
+        except OSError as e:
+            transfer.status = TransferStatus.FAILED
+            transfer.error = f"I/O error: {e}"
+            self._persist_queue()
+        except ValueError as e:
+            transfer.status = TransferStatus.FAILED
+            transfer.error = f"Invalid data: {e}"
+            self._persist_queue()
+        finally:
+            self._tasks.pop(transfer.id, None)
+            self._speed_trackers.pop(transfer.id, None)
+            self._notify_status_change(transfer)
+
+    async def _verify_checksum(self, transfer: Transfer, sftp: SFTPClient) -> bool:
+        """Verify download checksum if verification file exists."""
+        remote_dir = str(Path(transfer.remote_path).parent)
+        remote_name = Path(transfer.remote_path).name
+
+        # Look for .sfv or .md5 files
+        try:
+            files = await sftp.list_dir(remote_dir)
+            for f in files:
+                if f.name.endswith(".sfv"):
+                    checksum = await self._check_sfv(
+                        f"{remote_dir}/{f.name}", remote_name, transfer.local_path, sftp
+                    )
+                    if checksum is not None:
+                        return checksum
+                elif f.name.endswith(".md5"):
+                    checksum = await self._check_md5(
+                        f"{remote_dir}/{f.name}", remote_name, transfer.local_path, sftp
+                    )
+                    if checksum is not None:
+                        return checksum
+        except SFTPError:
+            pass
+
+        # No checksum file found, consider verified
+        return True
+
+    async def _check_sfv(
+        self, sfv_path: str, filename: str, local_path: str, sftp: SFTPClient
+    ) -> Optional[bool]:
+        """Check file against SFV (Simple File Verification) file."""
+        try:
+            content = await sftp.read_file(sfv_path)
+            lines = content.decode("utf-8", errors="ignore").splitlines()
+
+            for line in lines:
+                line = line.strip()
+                if line.startswith(";") or not line:
+                    continue
+                # SFV format: filename CRC32
+                match = re.match(r"(.+?)\s+([0-9a-fA-F]{8})$", line)
+                if match and match.group(1).lower() == filename.lower():
+                    expected_crc = match.group(2).lower()
+                    actual_crc = self._calculate_crc32(local_path)
+                    return actual_crc == expected_crc
+        except (SFTPError, UnicodeDecodeError):
+            pass
+        return None
+
+    async def _check_md5(
+        self, md5_path: str, filename: str, local_path: str, sftp: SFTPClient
+    ) -> Optional[bool]:
+        """Check file against MD5 checksum file."""
+        try:
+            content = await sftp.read_file(md5_path)
+            lines = content.decode("utf-8", errors="ignore").splitlines()
+
+            for line in lines:
+                line = line.strip()
+                if not line:
+                    continue
+                # MD5 format: hash *filename or hash  filename
+                match = re.match(r"([0-9a-fA-F]{32})\s+\*?(.+)$", line)
+                if match and match.group(2).strip().lower() == filename.lower():
+                    expected_md5 = match.group(1).lower()
+                    actual_md5 = self._calculate_md5(local_path)
+                    return actual_md5 == expected_md5
+        except (SFTPError, UnicodeDecodeError):
+            pass
+        return None
+
+    def _calculate_crc32(self, filepath: str) -> str:
+        """Calculate CRC32 checksum of a file."""
+        import zlib
+
+        crc = 0
+        with open(filepath, "rb") as f:
+            for chunk in iter(lambda: f.read(65536), b""):
+                crc = zlib.crc32(chunk, crc)
+        return format(crc & 0xFFFFFFFF, "08x")
+
+    def _calculate_md5(self, filepath: str) -> str:
+        """Calculate MD5 checksum of a file."""
+        md5 = hashlib.md5()
+        with open(filepath, "rb") as f:
+            for chunk in iter(lambda: f.read(65536), b""):
+                md5.update(chunk)
+        return md5.hexdigest()
+
+    def pause_transfer(self, transfer_id: str) -> bool:
+        """Pause a transfer."""
+        transfer = self.queue.get_by_id(transfer_id)
+        if transfer and transfer.status == TransferStatus.TRANSFERRING:
+            task = self._tasks.get(transfer_id)
+            if task:
+                task.cancel()
+            # Persist is called in the _do_download/upload exception handler
+            return True
+        return False
+
+    def resume_transfer(self, transfer_id: str) -> bool:
+        """Resume a paused transfer."""
+        transfer = self.queue.get_by_id(transfer_id)
+        if transfer and transfer.status == TransferStatus.PAUSED:
+            transfer.status = TransferStatus.QUEUED
+            self._notify_status_change(transfer)
+            self._persist_queue()
+            return True
+        return False
+
+    def remove_transfer(self, transfer_id: str) -> bool:
+        """Remove a transfer from the queue."""
+        transfer = self.queue.get_by_id(transfer_id)
+        if transfer:
+            # Cancel if running
+            if transfer.status == TransferStatus.TRANSFERRING:
+                task = self._tasks.get(transfer_id)
+                if task:
+                    task.cancel()
+            # Clear state cache
+            self.state_cache.clear_transfer(transfer_id)
+            result = self.queue.remove(transfer_id)
+            self._persist_queue()
+            return result
+        return False
+
+    def pause_all(self) -> int:
+        """Pause all active transfers. Returns count of paused transfers."""
+        count = 0
+        for t in self.queue.transfers:
+            if t.status == TransferStatus.TRANSFERRING:
+                if self.pause_transfer(t.id):
+                    count += 1
+        return count
+
+    def resume_all(self) -> int:
+        """Resume all paused transfers. Returns count of resumed transfers."""
+        count = 0
+        for t in self.queue.transfers:
+            if t.status == TransferStatus.PAUSED:
+                if self.resume_transfer(t.id):
+                    count += 1
+        return count
+
+    def stop_queue(self) -> int:
+        """Stop queue processing and stop all active transfers.
+
+        This truly stops the queue - no new transfers will start until resume_queue() is called.
+        Active transfers are marked as STOPPED (distinct from user-paused).
+        Returns the count of transfers that were stopped.
+        """
+        self._queue_paused = True
+        count = 0
+        for t in self.queue.transfers:
+            if t.status == TransferStatus.TRANSFERRING:
+                task = self._tasks.get(t.id)
+                if task:
+                    task.cancel()
+                # Status will be set to STOPPED in CancelledError handler
+                count += 1
+        self._persist_queue()
+        return count
+
+    def resume_queue(self) -> int:
+        """Resume queue processing.
+
+        This resumes queue processing - stopped transfers will start automatically.
+        Only STOPPED transfers are resumed; PAUSED transfers remain paused.
+        Returns the count of transfers that were set back to queued.
+        """
+        self._queue_paused = False
+        # Only resume STOPPED transfers, not user-PAUSED ones
+        count = 0
+        for t in self.queue.transfers:
+            if t.status == TransferStatus.STOPPED:
+                t.status = TransferStatus.QUEUED
+                self._notify_status_change(t)
+                count += 1
+        self._persist_queue()
+        return count
+
+    @property
+    def is_queue_paused(self) -> bool:
+        """Check if queue processing is paused."""
+        return self._queue_paused
+
+    def _notify_progress(self, transfer: Transfer) -> None:
+        """Notify progress callback."""
+        if self.on_progress:
+            self.on_progress(transfer)
+
+    def _notify_status_change(self, transfer: Transfer) -> None:
+        """Notify status change callback."""
+        if self.on_status_change:
+            self.on_status_change(transfer)
+
+    @property
+    def total_speed(self) -> float:
+        """Total download speed across all active transfers."""
+        return sum(t.speed for t in self.queue.transfers if t.status == TransferStatus.TRANSFERRING)
+
+
+class SpeedTracker:
+    """Tracks transfer speed with smoothing."""
+
+    def __init__(self, window_size: int = 10):
+        self.window_size = window_size
+        self._samples: list[tuple[float, int]] = []
+        self._last_bytes = 0
+
+    def update(self, current_bytes: int) -> float:
+        """Update with current bytes transferred, return smoothed speed."""
+        import time
+
+        now = time.time()
+        bytes_delta = current_bytes - self._last_bytes
+        self._last_bytes = current_bytes
+
+        self._samples.append((now, bytes_delta))
+
+        # Keep only recent samples
+        cutoff = now - 2.0  # 2 second window
+        self._samples = [(t, b) for t, b in self._samples if t > cutoff]
+
+        if len(self._samples) < 2:
+            return 0.0
+
+        # Calculate speed from samples
+        time_span = self._samples[-1][0] - self._samples[0][0]
+        if time_span <= 0:
+            return 0.0
+
+        total_bytes = sum(b for _, b in self._samples)
+        return total_bytes / time_span

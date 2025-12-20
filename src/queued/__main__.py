@@ -1,0 +1,73 @@
+"""Entry point for Queued TUI SFTP download manager."""
+
+import sys
+from pathlib import Path
+from typing import Optional
+
+import click
+
+from queued import __version__
+from queued.models import Host
+
+
+@click.command()
+@click.argument("connection", required=False)
+@click.option("-p", "--port", default=22, help="SSH port (default: 22)")
+@click.option("-i", "--identity", help="Path to SSH private key")
+@click.option("-P", "--password", is_flag=True, help="Prompt for password authentication")
+@click.option("-d", "--download-dir", help="Download directory (default: ~/Downloads)")
+@click.option("--version", is_flag=True, help="Show version and exit")
+def main(
+    connection: Optional[str],
+    port: int,
+    identity: Optional[str],
+    password: bool,
+    download_dir: Optional[str],
+    version: bool,
+) -> None:
+    """Queued - TUI SFTP download manager.
+
+    CONNECT as user@hostname to connect directly, or run without
+    arguments for interactive mode.
+
+    Examples:
+
+        queued user@server.example.com
+
+        queued user@host -p 2222 -i ~/.ssh/server_key
+
+        queued user@host -P  # Prompt for password
+
+        queued  # Interactive mode
+    """
+    if version:
+        click.echo(f"queued {__version__}")
+        sys.exit(0)
+
+    # Parse connection string if provided
+    host: Optional[Host] = None
+    if connection:
+        # Expand identity path if provided
+        key_path = None
+        if identity:
+            key_path = str(Path(identity).expanduser())
+
+        host = Host.from_string(connection, port=port, key_path=key_path)
+
+        # If no username, prompt for it
+        if not host.username:
+            host.username = click.prompt("Username")
+
+        # Prompt for password if -P flag is used
+        if password:
+            host.password = click.prompt("Password", hide_input=True)
+
+    # Import here to avoid slow startup for --version
+    from queued.app import QueuedApp
+
+    app = QueuedApp(host=host, download_dir=download_dir)
+    app.run()
+
+
+if __name__ == "__main__":
+    main()
