@@ -198,8 +198,8 @@ class TestQueueCache:
                 assert loaded[0].status == TransferStatus.QUEUED
                 assert loaded[1].status == TransferStatus.PAUSED
 
-    def test_queue_cache_preserves_paused_state(self):
-        """Queue paused state should be saved and loaded."""
+    def test_queue_cache_starts_fresh_on_load(self):
+        """Queue should always start running on load (not paused)."""
         with tempfile.TemporaryDirectory() as tmpdir:
             with patch("queued.config.get_cache_dir", return_value=Path(tmpdir)):
                 cache = QueueCache()
@@ -215,10 +215,11 @@ class TestQueueCache:
                     )
                 ]
 
+                # Even if saved as paused, should load as not paused
                 cache.save(transfers, queue_paused=True)
 
                 loaded, paused = cache.load()
-                assert paused is True
+                assert paused is False  # Queue always starts fresh
 
     def test_queue_cache_excludes_completed(self):
         """Completed transfers should not be saved."""
@@ -273,8 +274,8 @@ class TestQueueCache:
                 loaded, _ = cache.load()
                 assert len(loaded) == 0
 
-    def test_queue_cache_transferring_becomes_stopped(self):
-        """TRANSFERRING status should become STOPPED on load."""
+    def test_queue_cache_transferring_becomes_queued(self):
+        """TRANSFERRING and STOPPED should become QUEUED on load (auto-resume)."""
         with tempfile.TemporaryDirectory() as tmpdir:
             with patch("queued.config.get_cache_dir", return_value=Path(tmpdir)):
                 cache = QueueCache()
@@ -288,13 +289,23 @@ class TestQueueCache:
                         size=1000,
                         status=TransferStatus.TRANSFERRING,
                     ),
+                    Transfer(
+                        id="t2",
+                        remote_path="/stopped.txt",
+                        local_path="/tmp/stopped.txt",
+                        direction=TransferDirection.DOWNLOAD,
+                        size=2000,
+                        status=TransferStatus.STOPPED,
+                    ),
                 ]
 
                 cache.save(transfers)
 
                 loaded, _ = cache.load()
-                assert len(loaded) == 1
-                assert loaded[0].status == TransferStatus.STOPPED
+                assert len(loaded) == 2
+                # Both TRANSFERRING and STOPPED become QUEUED for auto-resume
+                assert loaded[0].status == TransferStatus.QUEUED
+                assert loaded[1].status == TransferStatus.QUEUED
 
     def test_queue_cache_clear(self):
         """Clear should remove the cache file."""

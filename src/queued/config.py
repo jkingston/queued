@@ -185,20 +185,23 @@ class QueueCache:
         """Load saved queue.
 
         Returns:
-            Tuple of (transfers, queue_paused). Transfers that were TRANSFERRING
-            are set to STOPPED. Other statuses are preserved.
+            Tuple of (transfers, queue_paused). State transitions on load:
+            - TRANSFERRING → QUEUED (was active when app quit, resume automatically)
+            - STOPPED → QUEUED (queue was stopped, resume automatically)
+            - PAUSED → PAUSED (user explicitly paused, stay paused)
         """
         if not self.cache_file.exists():
             return [], False
         try:
             data = json.loads(self.cache_file.read_text())
-            queue_paused = data.get("queue_paused", False)
             transfers = [Transfer.from_dict(t) for t in data.get("transfers", [])]
-            # Set any TRANSFERRING transfers to STOPPED (they were interrupted)
+            # Convert TRANSFERRING and STOPPED to QUEUED for auto-resume
+            # PAUSED stays PAUSED (user explicitly paused these)
             for t in transfers:
-                if t.status == TransferStatus.TRANSFERRING:
-                    t.status = TransferStatus.STOPPED
-            return transfers, queue_paused
+                if t.status in (TransferStatus.TRANSFERRING, TransferStatus.STOPPED):
+                    t.status = TransferStatus.QUEUED
+            # Don't restore queue_paused state - start fresh with queue running
+            return transfers, False
         except (json.JSONDecodeError, KeyError):
             return [], False
 

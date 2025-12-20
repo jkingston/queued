@@ -146,6 +146,7 @@ class Transfer:
     started_at: datetime | None = None
     completed_at: datetime | None = None
     checksum: str | None = None  # Expected checksum if known
+    _smoothed_eta_seconds: float | None = field(default=None, repr=False)  # Smoothed ETA
 
     @property
     def progress(self) -> float:
@@ -169,11 +170,20 @@ class Transfer:
 
     @property
     def eta(self) -> str | None:
-        """Return estimated time remaining."""
-        if self.speed == 0 or self.status != TransferStatus.TRANSFERRING:
+        """Return estimated time remaining (smoothed for stability)."""
+        if self.status != TransferStatus.TRANSFERRING:
             return None
-        remaining_bytes = self.size - self.bytes_transferred
-        seconds = remaining_bytes / self.speed
+
+        # Use smoothed ETA if available, otherwise calculate from raw speed
+        seconds = self._smoothed_eta_seconds
+        if seconds is None:
+            if self.speed <= 0:
+                return None
+            remaining_bytes = self.size - self.bytes_transferred
+            seconds = remaining_bytes / self.speed
+
+        if seconds <= 0:
+            return None
         if seconds < 60:
             return f"{int(seconds)}s"
         elif seconds < 3600:

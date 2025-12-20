@@ -1,7 +1,7 @@
 """Main Textual application for Queued."""
 
 import asyncio
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Optional
 
 from textual import work
@@ -64,25 +64,26 @@ class HelpScreen(ModalScreen):
             yield Label("Queued - Help", classes="help-title")
 
             yield Label("File Browser", classes="help-section")
-            yield Label("Enter     Open directory / Queue file", classes="help-item")
+            yield Label("Enter/l   Open directory / Queue file", classes="help-item")
+            yield Label("←/h       Go to parent directory", classes="help-item")
+            yield Label("↑↓/jk     Navigate files", classes="help-item")
             yield Label("Space     Toggle file selection", classes="help-item")
             yield Label("a         Select all files", classes="help-item")
             yield Label("Escape    Clear selection", classes="help-item")
-            yield Label("Backspace Go to parent directory", classes="help-item")
+            yield Label("d         Download cursor/selected", classes="help-item")
             yield Label("r         Refresh directory", classes="help-item")
 
             yield Label("Transfers", classes="help-section")
-            yield Label("d         Download selected file(s)", classes="help-item")
-            yield Label("s         Stop all downloads", classes="help-item")
-            yield Label("r         Resume all downloads", classes="help-item")
-            yield Label("p         Pause/Resume selected", classes="help-item")
-            yield Label("x         Remove selected", classes="help-item")
-            yield Label("↑/↓       Move in queue", classes="help-item")
+            yield Label("Enter/p   Pause/Resume transfer", classes="help-item")
+            yield Label("Space     Stop/Resume all downloads", classes="help-item")
+            yield Label("x/Delete  Remove from queue", classes="help-item")
+            yield Label("↑↓/jk     Navigate transfers", classes="help-item")
+            yield Label("⇧↑↓/JK    Reorder in queue", classes="help-item")
 
             yield Label("General", classes="help-section")
-            yield Label("Tab       Switch focus", classes="help-item")
+            yield Label("Tab       Switch pane focus", classes="help-item")
+            yield Label("?/F1      Show this help", classes="help-item")
             yield Label("q         Quit (saves queue)", classes="help-item")
-            yield Label("?         Show this help", classes="help-item")
 
 
 class ErrorModal(ModalScreen[None]):
@@ -367,6 +368,17 @@ class ConnectionScreen(ModalScreen[Optional[Host]]):
         super().__init__()
         self.recent_hosts = recent_hosts or []
 
+    def on_mount(self) -> None:
+        """Pre-populate with last used host for quick reconnect."""
+        if self.recent_hosts:
+            # Pre-fill form with most recent host
+            self._prefill_form(self.recent_hosts[0])
+            # Focus Connect button for single-keypress reconnect
+            self.query_one("#connect-btn", Button).focus()
+        else:
+            # No recent hosts - focus the host input
+            self.query_one("#host-input", Input).focus()
+
     def compose(self) -> ComposeResult:
         with Container():
             yield Label("Connect to Server", classes="dialog-title")
@@ -413,7 +425,6 @@ class ConnectionScreen(ModalScreen[Optional[Host]]):
         if host.password:
             self.query_one("#password-input", Input).value = host.password
             self.query_one("#save-password-checkbox", Checkbox).value = True
-        self.query_one("#password-input", Input).focus()
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         """Handle Enter in input fields."""
@@ -493,12 +504,8 @@ class QueuedApp(App):
     BINDINGS = [
         Binding("q", "quit", "Quit", show=True),
         Binding("?", "help", "Help", show=True),
-        Binding("d", "download", "Download", show=True),
-        Binding("s", "stop_all", "Stop All", show=True),
-        Binding("r", "resume_all", "Resume All", show=True),
-        Binding("o", "options", "Options", show=True),
-        Binding("t", "toggle_transfers", "Transfers", show=True),
-        Binding("tab", "focus_next", "Switch Pane", show=False),
+        Binding("f1", "help", "Help", show=False),
+        Binding("tab", "focus_next", "Switch Pane", show=True),
         Binding("shift+tab", "focus_previous", "Switch Pane", show=False),
     ]
 
@@ -680,10 +687,12 @@ class QueuedApp(App):
 
         for f in files:
             if f.is_dir:
+                # Use parent of selected dir as base, so dir name is included
+                base_dir = str(PurePosixPath(f.path).parent)
                 # Recursively get all files in directory
                 dir_files = await self._list_dir_recursive(f.path)
                 for df in dir_files:
-                    result = await self._add_download_with_exists_check(df)
+                    result = await self._add_download_with_exists_check(df, base_dir)
                     if result == "added":
                         count += 1
                     elif result == "skipped":
@@ -716,8 +725,14 @@ class QueuedApp(App):
         file_browser = self.query_one("#file-browser", FileBrowser)
         file_browser.refresh_directory()
 
-    async def _add_download_with_exists_check(self, f: RemoteFile) -> str:
+    async def _add_download_with_exists_check(
+        self, f: RemoteFile, base_dir: str | None = None
+    ) -> str:
         """Add a file to download queue, checking if local file exists.
+
+        Args:
+            f: The remote file to download
+            base_dir: Base directory for preserving folder structure
 
         Returns:
             "added" - file was added to queue
@@ -727,7 +742,7 @@ class QueuedApp(App):
         status_bar = self.query_one("#status-bar", StatusBar)
 
         # Check if local file already exists
-        local_path = self._compute_local_path(f)
+        local_path = self._compute_local_path(f, base_dir)
         if local_path.exists():
             local_size = local_path.stat().st_size
 
@@ -750,7 +765,9 @@ class QueuedApp(App):
 
         # Add to queue
         try:
-            transfer = self.transfer_manager.add_download(f, host=self._current_host)
+            transfer = self.transfer_manager.add_download(
+                f, host=self._current_host, base_dir=base_dir
+            )
             if transfer:
                 return "added"
             else:
@@ -770,16 +787,25 @@ class QueuedApp(App):
                 all_files.append(entry)
         return all_files
 
-    def _compute_local_path(self, remote_file: RemoteFile) -> Path:
+    def _compute_local_path(
+        self, remote_file: RemoteFile, base_dir: str | None = None
+    ) -> Path:
         """Compute local path for a remote file (mirrors add_download logic)."""
         download_dir = Path(self.settings_manager.settings.download_dir).expanduser()
-        safe_name = Path(remote_file.name).name
-        return (download_dir / safe_name).resolve()
+        if base_dir:
+            # Preserve directory structure relative to base_dir
+            rel_path = PurePosixPath(remote_file.path).relative_to(base_dir)
+            return (download_dir / rel_path).resolve()
+        else:
+            safe_name = Path(remote_file.name).name
+            return (download_dir / safe_name).resolve()
 
     def on_transfer_list_transfer_action(self, event: TransferList.TransferAction) -> None:
         """Handle transfer actions."""
         if not self.transfer_manager:
             return
+
+        status_bar = self.query_one("#status-bar", StatusBar)
 
         if event.action == "pause":
             self.transfer_manager.pause_transfer(event.transfer_id)
@@ -787,6 +813,19 @@ class QueuedApp(App):
             self.transfer_manager.resume_transfer(event.transfer_id)
         elif event.action == "remove":
             self.transfer_manager.remove_transfer(event.transfer_id)
+        elif event.action == "toggle_queue":
+            if self.transfer_manager.is_queue_paused:
+                count = self.transfer_manager.resume_queue()
+                if count > 0:
+                    status_bar.show_message(f"Queue resumed, {count} download(s) queued")
+                else:
+                    status_bar.show_message("Queue resumed")
+            else:
+                count = self.transfer_manager.stop_queue()
+                if count > 0:
+                    status_bar.show_message(f"Queue stopped, paused {count} download(s)")
+                else:
+                    status_bar.show_message("Queue stopped")
 
         transfer_list = self.query_one("#transfer-list", TransferList)
         transfer_list.refresh_display()
@@ -795,47 +834,9 @@ class QueuedApp(App):
         """Show help screen."""
         self.push_screen(HelpScreen())
 
-    def action_download(self) -> None:
-        """Queue selected files for download."""
-        file_browser = self.query_one("#file-browser", FileBrowser)
-        files = file_browser.queue_selected()
-        if files:
-            self._queue_downloads(files)
-
-    def action_stop_all(self) -> None:
-        """Stop all queue processing - no new downloads will start."""
-        if not self.transfer_manager:
-            return
-
-        count = self.transfer_manager.stop_queue()
-        status_bar = self.query_one("#status-bar", StatusBar)
-        if count > 0:
-            status_bar.show_message(f"Queue stopped, paused {count} download(s)")
-        else:
-            status_bar.show_message("Queue stopped")
-
-        transfer_list = self.query_one("#transfer-list", TransferList)
-        transfer_list.refresh_display()
-
-    def action_resume_all(self) -> None:
-        """Resume queue processing - downloads will start from queue."""
-        if not self.transfer_manager:
-            return
-
-        count = self.transfer_manager.resume_queue()
-        status_bar = self.query_one("#status-bar", StatusBar)
-        if count > 0:
-            status_bar.show_message(f"Queue resumed, {count} download(s) queued")
-        else:
-            status_bar.show_message("Queue resumed")
-
-        transfer_list = self.query_one("#transfer-list", TransferList)
-        transfer_list.refresh_display()
-
-    def action_options(self) -> None:
-        """Open download directory settings."""
-        current = self.settings_manager.settings.download_dir
-        self.push_screen(DownloadDirModal(current), self._on_download_dir_result)
+    def on_file_browser_download_requested(self, event: FileBrowser.DownloadRequested) -> None:
+        """Handle download request from file browser."""
+        self._queue_downloads(event.files)
 
     def _on_download_dir_result(self, path: str | None) -> None:
         """Handle download directory change."""
@@ -858,20 +859,16 @@ class QueuedApp(App):
             status_bar.set_download_dir(path)
             status_bar.show_message(f"Download dir: {path}")
 
-    def action_toggle_transfers(self) -> None:
-        """Toggle transfer list visibility."""
-        transfer_list = self.query_one("#transfer-list", TransferList)
-        transfer_list.toggle_class("hidden")
-
     async def action_quit(self) -> None:
-        """Quit the application - pause all transfers and persist queue."""
+        """Quit the application - stop active transfers (they resume on restart)."""
         # Clean up refresh timer
         if self._refresh_timer:
             self._refresh_timer.cancel()
 
-        # Pause all active transfers for resumable state
+        # Stop queue - marks TRANSFERRING as STOPPED (not PAUSED)
+        # STOPPED transfers auto-resume on restart, PAUSED ones stay paused
         if self.transfer_manager:
-            self.transfer_manager.pause_all()
+            self.transfer_manager.stop_queue()
 
             # Stop transfer manager and wait for tasks to complete
             await self.transfer_manager.stop()

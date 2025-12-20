@@ -7,7 +7,7 @@ import re
 import uuid
 from collections.abc import Callable
 from datetime import datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from queued.config import QueueCache, TransferStateCache
 from queued.models import (
@@ -50,6 +50,7 @@ class TransferManager:
         self._queue_paused = False  # True when queue processing is stopped (s key)
         self._tasks: dict[str, asyncio.Task] = {}
         self._speed_trackers: dict[str, SpeedTracker] = {}
+        self._individually_paused: set[str] = set()  # Track individual pause requests
 
         # Load any persisted transfers and queue state from previous session
         transfers, queue_paused = self.queue_cache.load()
@@ -62,8 +63,16 @@ class TransferManager:
         remote_file: RemoteFile,
         host: Host | None = None,
         local_dir: str | None = None,
+        base_dir: str | None = None,
     ) -> Transfer | None:
         """Add a file to the download queue.
+
+        Args:
+            remote_file: The remote file to download
+            host: Optional host for multi-server support
+            local_dir: Override download directory
+            base_dir: Base directory for preserving folder structure.
+                      If provided, the relative path from base_dir is preserved.
 
         Returns None if the file is already in the queue (duplicate prevention).
         """
@@ -76,17 +85,28 @@ class TransferManager:
         if local_dir is None:
             local_dir = str(Path(self.settings.download_dir).expanduser())
 
-        # Sanitize filename to prevent path traversal attacks
-        safe_name = Path(remote_file.name).name  # Extract just the filename
-        if not safe_name or safe_name in (".", ".."):
-            raise ValueError(f"Invalid filename: {remote_file.name}")
-
-        # Resolve paths and verify the target is under download directory
         download_base = Path(local_dir).resolve()
-        local_path = (download_base / safe_name).resolve()
 
+        if base_dir:
+            # Preserve directory structure relative to base_dir
+            rel_path = PurePosixPath(remote_file.path).relative_to(base_dir)
+            # Validate each component to prevent path traversal
+            for part in rel_path.parts:
+                if part in (".", "..") or not part:
+                    raise ValueError(f"Invalid path component: {part}")
+            local_path = (download_base / rel_path).resolve()
+            # Create parent directories
+            local_path.parent.mkdir(parents=True, exist_ok=True)
+        else:
+            # Single file - just use filename
+            safe_name = Path(remote_file.name).name
+            if not safe_name or safe_name in (".", ".."):
+                raise ValueError(f"Invalid filename: {remote_file.name}")
+            local_path = (download_base / safe_name).resolve()
+
+        # Security check - ensure path is under download directory
         if not str(local_path).startswith(str(download_base)):
-            raise ValueError(f"Path traversal attempt blocked: {remote_file.name}")
+            raise ValueError(f"Path traversal attempt blocked: {remote_file.path}")
 
         local_path = str(local_path)
 
@@ -201,6 +221,11 @@ class TransferManager:
                 speed_tracker = self._speed_trackers.get(transfer.id)
                 if speed_tracker:
                     transfer.speed = speed_tracker.update(bytes_done)
+                    # Calculate smoothed ETA for stable display
+                    remaining = transfer.size - bytes_done
+                    transfer._smoothed_eta_seconds = speed_tracker.get_smoothed_eta(
+                        remaining, transfer.speed
+                    )
                 self._notify_progress(transfer)
 
                 # Save state for resume
@@ -245,11 +270,13 @@ class TransferManager:
             self._persist_queue()
             logger.error("Download failed: %s - %s", transfer.remote_path, e)
         except asyncio.CancelledError:
-            # Distinguish between queue stop and individual pause
-            if self._queue_paused:
-                transfer.status = TransferStatus.STOPPED
-            else:
+            # Check if this was an individual pause request
+            if transfer.id in self._individually_paused:
+                self._individually_paused.discard(transfer.id)
                 transfer.status = TransferStatus.PAUSED
+            else:
+                # Queue was stopped
+                transfer.status = TransferStatus.STOPPED
             self._persist_queue()
         except OSError as e:
             transfer.status = TransferStatus.FAILED
@@ -275,6 +302,11 @@ class TransferManager:
                 speed_tracker = self._speed_trackers.get(transfer.id)
                 if speed_tracker:
                     transfer.speed = speed_tracker.update(bytes_done)
+                    # Calculate smoothed ETA for stable display
+                    remaining = transfer.size - bytes_done
+                    transfer._smoothed_eta_seconds = speed_tracker.get_smoothed_eta(
+                        remaining, transfer.speed
+                    )
                 self._notify_progress(transfer)
 
             await sftp.upload(
@@ -293,11 +325,13 @@ class TransferManager:
             transfer.error = str(e)
             self._persist_queue()
         except asyncio.CancelledError:
-            # Distinguish between queue stop and individual pause
-            if self._queue_paused:
-                transfer.status = TransferStatus.STOPPED
-            else:
+            # Check if this was an individual pause request
+            if transfer.id in self._individually_paused:
+                self._individually_paused.discard(transfer.id)
                 transfer.status = TransferStatus.PAUSED
+            else:
+                # Queue was stopped
+                transfer.status = TransferStatus.STOPPED
             self._persist_queue()
         except OSError as e:
             transfer.status = TransferStatus.FAILED
@@ -404,7 +438,15 @@ class TransferManager:
     def pause_transfer(self, transfer_id: str) -> bool:
         """Pause a transfer."""
         transfer = self.queue.get_by_id(transfer_id)
-        if transfer and transfer.status == TransferStatus.TRANSFERRING:
+        if transfer and transfer.status in (TransferStatus.TRANSFERRING, TransferStatus.QUEUED):
+            if transfer.status == TransferStatus.QUEUED:
+                # Just mark as paused, no task to cancel
+                transfer.status = TransferStatus.PAUSED
+                self._notify_status_change(transfer)
+                self._persist_queue()
+                return True
+            # TRANSFERRING - cancel the task
+            self._individually_paused.add(transfer_id)  # Mark as individual pause
             task = self._tasks.get(transfer_id)
             if task:
                 task.cancel()
@@ -413,9 +455,9 @@ class TransferManager:
         return False
 
     def resume_transfer(self, transfer_id: str) -> bool:
-        """Resume a paused transfer."""
+        """Resume a paused or stopped transfer."""
         transfer = self.queue.get_by_id(transfer_id)
-        if transfer and transfer.status == TransferStatus.PAUSED:
+        if transfer and transfer.status in (TransferStatus.PAUSED, TransferStatus.STOPPED):
             transfer.status = TransferStatus.QUEUED
             self._notify_status_change(transfer)
             self._persist_queue()
@@ -525,6 +567,8 @@ class SpeedTracker:
         self.window_size = window_size
         self._samples: list[tuple[float, int]] = []
         self._last_bytes = 0
+        self._smoothed_eta: float | None = None
+        self._alpha = 0.15  # EMA factor: lower = smoother, higher = more responsive
 
     def update(self, current_bytes: int) -> float:
         """Update with current bytes transferred, return smoothed speed."""
@@ -550,3 +594,18 @@ class SpeedTracker:
 
         total_bytes = sum(b for _, b in self._samples)
         return total_bytes / time_span
+
+    def get_smoothed_eta(self, remaining_bytes: int, current_speed: float) -> float | None:
+        """Return smoothed ETA in seconds using exponential moving average."""
+        if current_speed <= 0:
+            return None
+
+        raw_eta = remaining_bytes / current_speed
+
+        if self._smoothed_eta is None:
+            self._smoothed_eta = raw_eta
+        else:
+            # EMA: blend new value with previous for smoother transitions
+            self._smoothed_eta = self._alpha * raw_eta + (1 - self._alpha) * self._smoothed_eta
+
+        return self._smoothed_eta

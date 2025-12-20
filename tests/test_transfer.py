@@ -206,8 +206,8 @@ class TestTransferManagerPauseResume:
                 assert result is True
                 assert transfer.status == TransferStatus.QUEUED
 
-    def test_resume_does_not_affect_stopped(self):
-        """resume_transfer should NOT resume STOPPED transfers (use resume_queue)."""
+    def test_resume_works_on_stopped(self):
+        """resume_transfer should resume STOPPED transfers (individual resume)."""
         with tempfile.TemporaryDirectory() as tmpdir:
             with patch("queued.config.get_cache_dir", return_value=Path(tmpdir)):
                 manager = TransferManager()
@@ -224,8 +224,8 @@ class TestTransferManagerPauseResume:
 
                 result = manager.resume_transfer("test-1")
 
-                assert result is False
-                assert transfer.status == TransferStatus.STOPPED
+                assert result is True
+                assert transfer.status == TransferStatus.QUEUED
 
 
 class TestTransferManagerStopResume:
@@ -345,8 +345,8 @@ class TestTransferManagerPersistence:
                 assert len(manager2.queue.transfers) == 1
                 assert manager2.queue.transfers[0].remote_path == "/test.txt"
 
-    def test_queue_paused_state_persisted(self):
-        """Queue paused state should be saved and loaded."""
+    def test_queue_starts_running_on_load(self):
+        """Queue should always start running on load (not paused)."""
         with tempfile.TemporaryDirectory() as tmpdir:
             with patch("queued.config.get_cache_dir", return_value=Path(tmpdir)):
                 settings = AppSettings(download_dir=tmpdir)
@@ -362,10 +362,11 @@ class TestTransferManagerPersistence:
                 manager.add_download(remote_file)
                 manager.stop_queue()
 
-                # Load in new instance
+                # Load in new instance - queue should start running
                 manager2 = TransferManager(settings=settings)
 
-                assert manager2.is_queue_paused is True
+                # Queue always starts fresh (not paused)
+                assert manager2.is_queue_paused is False
 
     def test_load_restores_transfers(self):
         """Loading should restore transfer list from cache."""

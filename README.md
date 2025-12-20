@@ -64,26 +64,32 @@ queued
 ### File Browser
 | Key | Action |
 |-----|--------|
-| `Enter` | Open directory / Queue file for download |
+| `Enter` / `l` | Open directory / Queue file for download |
+| `Backspace` / `h` | Go to parent directory |
+| `↑` / `k` | Move cursor up |
+| `↓` / `j` | Move cursor down |
 | `Space` | Toggle file selection |
 | `a` | Select all files |
 | `Escape` | Clear selection |
-| `Backspace` | Go to parent directory |
 | `r` | Refresh directory listing |
+| `d` | Download cursor/selected (recursive for dirs) |
 
 ### Transfers
 | Key | Action |
 |-----|--------|
-| `p` | Pause/Resume transfer |
-| `x` | Remove transfer |
-| `↑/↓` | Move transfer in queue |
+| `Enter` / `p` | Pause/Resume selected transfer |
+| `Space` | Stop/Resume all downloads |
+| `x` / `Delete` | Remove transfer |
+| `↑` / `k` | Move cursor up |
+| `↓` / `j` | Move cursor down |
+| `Shift+↑` / `K` | Move transfer up in queue |
+| `Shift+↓` / `J` | Move transfer down in queue |
 
 ### General
 | Key | Action |
 |-----|--------|
 | `Tab` | Switch between panes |
-| `d` | Download selected files |
-| `?` | Show help |
+| `?` / `F1` | Show help |
 | `q` | Quit |
 
 ## Configuration
@@ -102,6 +108,24 @@ Settings are stored in `~/.config/queued/settings.json`:
 ```
 
 Recent hosts are cached in `~/.cache/queued/hosts.json` for quick reconnection.
+
+## Troubleshooting
+
+### Washed-out colors over SSH
+
+If colors appear washed out when running over SSH (especially with modern terminals like Ghostty), ensure `COLORTERM` is set on the remote host:
+
+```bash
+# Add to your remote .bashrc or .zshrc
+export COLORTERM=truecolor
+```
+
+Or pass it when connecting:
+```bash
+ssh -o SendEnv=COLORTERM user@host
+```
+
+Note: The remote SSH server must be configured to accept `COLORTERM` via `AcceptEnv` in `/etc/ssh/sshd_config`.
 
 ## Development
 

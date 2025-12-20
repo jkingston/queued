@@ -18,10 +18,17 @@ class TransferList(Static):
     """Transfer queue display with progress bars."""
 
     BINDINGS = [
-        Binding("p", "pause", "Pause/Resume", show=True),
-        Binding("x", "remove", "Remove", show=True),
-        Binding("up", "move_up", "Move Up", show=False),
-        Binding("down", "move_down", "Move Down", show=False),
+        Binding("enter", "toggle_pause", "Pause/Resume", key_display="↵/p"),
+        Binding("p", "toggle_pause", "Pause/Resume", show=False),
+        Binding("space", "toggle_queue", "Stop/Start All"),
+        Binding("x", "remove", "Remove", key_display="x/Del"),
+        Binding("delete", "remove", "Remove", show=False),
+        Binding("j", "cursor_down", show=False),
+        Binding("k", "cursor_up", show=False),
+        Binding("shift+up", "move_up", "Move Up", key_display="⇧↑/K"),
+        Binding("shift+down", "move_down", "Move Down", key_display="⇧↓/J"),
+        Binding("K", "move_up", show=False),
+        Binding("J", "move_down", show=False),
     ]
 
     DEFAULT_CSS = """
@@ -115,19 +122,35 @@ class TransferList(Static):
         """Build row data tuple for a transfer."""
         return (
             transfer.filename,
-            self._make_progress_bar(transfer.progress),
+            self._make_progress_bar(transfer),
             transfer.speed_human if transfer.status == TransferStatus.TRANSFERRING else "",
             transfer.eta or "" if transfer.status == TransferStatus.TRANSFERRING else "",
             self._format_status(transfer),
         )
 
-    def _make_progress_bar(self, percent: float) -> str:
-        """Create a text-based progress bar."""
+    def _make_progress_bar(self, transfer: Transfer) -> str:
+        """Create a text-based progress bar with size info."""
+        percent = transfer.progress
         width = 8
         filled = int(width * percent / 100)
         empty = width - filled
         bar = "█" * filled + "░" * empty
-        return f"[{bar}] {percent:3.0f}%"
+
+        sizes = self._format_size_pair(transfer.bytes_transferred, transfer.size)
+        return f"{sizes} [{bar}] {percent:3.0f}%"
+
+    def _format_size_pair(self, downloaded: int, total: int) -> str:
+        """Format downloaded/total with same unit for alignment."""
+        units = [("TB", 1024**4), ("GB", 1024**3), ("MB", 1024**2), ("KB", 1024)]
+
+        for unit, divisor in units:
+            if total >= divisor:
+                dl = downloaded / divisor
+                tot = total / divisor
+                return f"{dl:5.1f}/{tot:5.1f} {unit}"
+
+        # Bytes
+        return f"{downloaded:5d}/{total:5d} B"
 
     def _format_status(self, transfer: Transfer) -> str:
         """Format transfer status for display."""
@@ -178,7 +201,11 @@ class TransferList(Static):
 
         label.update(" | ".join(parts))
 
-    def action_pause(self) -> None:
+    def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
+        """Handle row selection (Enter key) - toggle pause/resume."""
+        self.action_toggle_pause()
+
+    def action_toggle_pause(self) -> None:
         """Pause or resume the selected transfer."""
         table = self.query_one("#transfer-table", DataTable)
         if table.cursor_row is None or not self.queue:
@@ -192,10 +219,14 @@ class TransferList(Static):
         transfer = self.queue.get_by_id(transfer_id)
 
         if transfer:
-            if transfer.status == TransferStatus.TRANSFERRING:
+            if transfer.status in (TransferStatus.TRANSFERRING, TransferStatus.QUEUED):
                 self.post_message(self.TransferAction(transfer_id, "pause"))
-            elif transfer.status == TransferStatus.PAUSED:
+            elif transfer.status in (TransferStatus.PAUSED, TransferStatus.STOPPED):
                 self.post_message(self.TransferAction(transfer_id, "resume"))
+
+    def action_toggle_queue(self) -> None:
+        """Stop or resume all queue processing."""
+        self.post_message(self.TransferAction("", "toggle_queue"))
 
     def action_remove(self) -> None:
         """Remove the selected transfer."""
@@ -209,6 +240,16 @@ class TransferList(Static):
 
         transfer_id = str(keys[table.cursor_row].value)
         self.post_message(self.TransferAction(transfer_id, "remove"))
+
+    def action_cursor_down(self) -> None:
+        """Move cursor down in transfer list."""
+        table = self.query_one("#transfer-table", DataTable)
+        table.action_cursor_down()
+
+    def action_cursor_up(self) -> None:
+        """Move cursor up in transfer list."""
+        table = self.query_one("#transfer-table", DataTable)
+        table.action_cursor_up()
 
     def action_move_up(self) -> None:
         """Move selected transfer up in queue."""

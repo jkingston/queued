@@ -17,12 +17,17 @@ class FileBrowser(Static):
     """Remote file browser with selection support."""
 
     BINDINGS = [
-        Binding("enter", "select", "Open/Select", show=True),
-        Binding("space", "toggle_select", "Toggle Select", show=True),
-        Binding("backspace", "go_up", "Go Up", show=True),
-        Binding("r", "refresh", "Refresh", show=True),
-        Binding("a", "select_all", "Select All", show=True),
-        Binding("escape", "clear_selection", "Clear Selection", show=True),
+        Binding("enter", "select", "Open/Queue", key_display="↵/l"),
+        Binding("l", "select", "Open/Queue", show=False),
+        Binding("space", "toggle_select", "Select"),
+        Binding("backspace", "go_up", "Up Dir", key_display="←/h"),
+        Binding("h", "go_up", "Up Dir", show=False),
+        Binding("r", "refresh", "Refresh"),
+        Binding("a", "select_all", "Sel All"),
+        Binding("escape", "clear_selection", "Clear", key_display="Esc"),
+        Binding("d", "download", "Download"),
+        Binding("j", "cursor_down", show=False),
+        Binding("k", "cursor_up", show=False),
     ]
 
     DEFAULT_CSS = """
@@ -67,6 +72,13 @@ class FileBrowser(Static):
         def __init__(self, path: str) -> None:
             super().__init__()
             self.path = path
+
+    class DownloadRequested(Message):
+        """Download requested for files."""
+
+        def __init__(self, files: list[RemoteFile]) -> None:
+            super().__init__()
+            self.files = files
 
     def __init__(
         self,
@@ -293,6 +305,16 @@ class FileBrowser(Static):
         self._selected.clear()
         self._update_table()
 
+    def action_cursor_down(self) -> None:
+        """Move cursor down in file list."""
+        table = self.query_one("#file-table", DataTable)
+        table.action_cursor_down()
+
+    def action_cursor_up(self) -> None:
+        """Move cursor up in file list."""
+        table = self.query_one("#file-table", DataTable)
+        table.action_cursor_up()
+
     def _emit_selection(self) -> None:
         """Emit FileSelected message with current selection."""
         selected_files = [f for f in self._files if f.path in self._selected]
@@ -330,3 +352,9 @@ class FileBrowser(Static):
                 if f.path == key:
                     return [f]
             return []
+
+    def action_download(self) -> None:
+        """Queue selected files for download."""
+        files = self.queue_selected()
+        if files:
+            self.post_message(self.DownloadRequested(files))
