@@ -1,7 +1,6 @@
 """Transfer queue list widget with progress display."""
 
 import time
-from typing import Optional
 
 from textual.app import ComposeResult
 from textual.binding import Binding
@@ -62,9 +61,9 @@ class TransferList(Static):
             self.transfer_id = transfer_id
             self.action = action
 
-    def __init__(self, id: Optional[str] = None) -> None:
+    def __init__(self, id: str | None = None) -> None:
         super().__init__(id=id)
-        self.queue: Optional[TransferQueue] = None
+        self.queue: TransferQueue | None = None
         self._last_refresh_time: float = 0.0
         self._refresh_pending: bool = False
 

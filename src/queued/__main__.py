@@ -2,7 +2,6 @@
 
 import sys
 from pathlib import Path
-from typing import Optional
 
 import click
 
@@ -18,11 +17,11 @@ from queued.models import Host
 @click.option("-d", "--download-dir", help="Download directory (default: ~/Downloads)")
 @click.option("--version", is_flag=True, help="Show version and exit")
 def main(
-    connection: Optional[str],
+    connection: str | None,
     port: int,
-    identity: Optional[str],
+    identity: str | None,
     password: bool,
-    download_dir: Optional[str],
+    download_dir: str | None,
     version: bool,
 ) -> None:
     """Queued - TUI SFTP download manager.
@@ -45,7 +44,7 @@ def main(
         sys.exit(0)
 
     # Parse connection string if provided
-    host: Optional[Host] = None
+    host: Host | None = None
     if connection:
         # Expand identity path if provided
         key_path = None

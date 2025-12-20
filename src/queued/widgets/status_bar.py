@@ -1,7 +1,5 @@
 """Status bar widget showing connection info and global stats."""
 
-from typing import Optional
-
 from textual.app import ComposeResult
 from textual.widgets import Static
 
@@ -27,7 +25,7 @@ class StatusBar(Static):
     }
     """
 
-    def __init__(self, id: Optional[str] = None) -> None:
+    def __init__(self, id: str | None = None) -> None:
         super().__init__(id=id)
         self._host: str = ""
         self._connected: bool = False

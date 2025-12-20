@@ -3,7 +3,6 @@
 import json
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
 
 from queued.models import AppSettings, Host, Transfer, TransferStatus
 
@@ -49,7 +48,11 @@ class HostCache:
         """Add or update a host in the cache."""
         host.last_used = datetime.now()
         # Remove existing entry for same host
-        self._hosts = [h for h in self._hosts if not (h.hostname == host.hostname and h.username == host.username)]
+        self._hosts = [
+            h
+            for h in self._hosts
+            if not (h.hostname == host.hostname and h.username == host.username)
+        ]
         # Add to front
         self._hosts.insert(0, host)
         # Trim to max size
@@ -60,14 +63,14 @@ class HostCache:
         """Get recently used hosts."""
         return self._hosts[:limit]
 
-    def get_by_hostname(self, hostname: str) -> Optional[Host]:
+    def get_by_hostname(self, hostname: str) -> Host | None:
         """Find a host by hostname."""
         for host in self._hosts:
             if host.hostname == hostname:
                 return host
         return None
 
-    def get_by_key(self, host_key: str) -> Optional[Host]:
+    def get_by_key(self, host_key: str) -> Host | None:
         """Find a host by its key (user@hostname:port)."""
         for host in self._hosts:
             if host.host_key == host_key:
@@ -95,7 +98,14 @@ class TransferStateCache:
         """Save transfer state to cache file."""
         self.cache_file.write_text(json.dumps(self._state, indent=2))
 
-    def save_transfer(self, transfer_id: str, remote_path: str, local_path: str, bytes_transferred: int, total_size: int) -> None:
+    def save_transfer(
+        self,
+        transfer_id: str,
+        remote_path: str,
+        local_path: str,
+        bytes_transferred: int,
+        total_size: int,
+    ) -> None:
         """Save transfer progress for resume."""
         self._state[transfer_id] = {
             "remote_path": remote_path,
@@ -108,7 +118,7 @@ class TransferStateCache:
 
     def get_resume_offset(self, remote_path: str, local_path: str) -> int:
         """Get bytes already transferred for a file (for resume)."""
-        for transfer_id, data in self._state.items():
+        for _transfer_id, data in self._state.items():
             if data["remote_path"] == remote_path and data["local_path"] == local_path:
                 # Verify local file exists and matches expected size
                 local_file = Path(local_path)
@@ -151,7 +161,8 @@ class QueueCache:
         """
         # Only save transfers that should be resumed
         active = [
-            t for t in transfers
+            t
+            for t in transfers
             if t.status not in (TransferStatus.COMPLETED, TransferStatus.FAILED)
         ]
         data = {

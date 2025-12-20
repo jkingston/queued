@@ -9,7 +9,7 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Container, Horizontal, Vertical
 from textual.screen import ModalScreen
-from textual.widgets import Button, Footer, Header, Input, Label, Static
+from textual.widgets import Button, Footer, Header, Input, Label
 
 from queued.config import HostCache, QueueCache, SettingsManager
 from queued.models import Host, RemoteFile, Transfer
@@ -199,15 +199,10 @@ class FileExistsModal(ModalScreen[Optional[str]]):
             yield Label(f"Remote size: {self._format_size(self.remote_size)}", classes="file-info")
 
             if self.can_continue:
-                yield Label(
-                    f"Resume available: {self._format_size(self.remote_size - self.local_size)} remaining",
-                    classes="file-info"
-                )
+                remaining = self._format_size(self.remote_size - self.local_size)
+                yield Label(f"Resume available: {remaining} remaining", classes="file-info")
             else:
-                yield Label(
-                    "Resume not available (local file >= remote size)",
-                    classes="file-info"
-                )
+                yield Label("Resume not available (local file >= remote size)", classes="file-info")
 
             with Horizontal(classes="button-row"):
                 if self.can_continue:
@@ -498,18 +493,18 @@ class QueuedApp(App):
         Binding("shift+tab", "focus_previous", "Switch Pane", show=False),
     ]
 
-    def __init__(self, host: Optional[Host] = None, download_dir: Optional[str] = None) -> None:
+    def __init__(self, host: Host | None = None, download_dir: str | None = None) -> None:
         super().__init__()
         self.initial_host = host
-        self.sftp: Optional[SFTPClient] = None
-        self.transfer_manager: Optional[TransferManager] = None
+        self.sftp: SFTPClient | None = None
+        self.transfer_manager: TransferManager | None = None
         self.host_cache = HostCache()
         self.settings_manager = SettingsManager()
         self.queue_cache = QueueCache()
         self.connection_pool = SFTPConnectionPool(self.host_cache)
-        self._transfer_task: Optional[asyncio.Task] = None
-        self._refresh_timer: Optional[asyncio.Task] = None
-        self._current_host: Optional[Host] = None
+        self._transfer_task: asyncio.Task | None = None
+        self._refresh_timer: asyncio.Task | None = None
+        self._current_host: Host | None = None
 
         # Override download dir if provided via CLI
         if download_dir:
@@ -540,7 +535,7 @@ class QueuedApp(App):
         recent = self.host_cache.get_recent(5)
         self.push_screen(ConnectionScreen(recent), self._on_connection_result)
 
-    def _on_connection_result(self, host: Optional[Host]) -> None:
+    def _on_connection_result(self, host: Host | None) -> None:
         """Handle connection dialog result."""
         if host:
             self._connect(host)
@@ -613,17 +608,14 @@ class QueuedApp(App):
             # Show message if we loaded persisted transfers
             persisted_count = len([t for t in self.transfer_manager.queue.transfers])
             if persisted_count > 0:
-                status_bar.show_message(f"Loaded {persisted_count} transfer(s) from previous session")
+                status_bar.show_message(f"Loaded {persisted_count} transfer(s) from session")
 
             # Start auto-refresh if enabled
             if settings.auto_refresh_interval > 0:
                 self._start_auto_refresh(settings.auto_refresh_interval)
 
         except SFTPError as e:
-            self.push_screen(
-                ErrorModal(str(e)),
-                lambda _: self._show_connection_dialog()
-            )
+            self.push_screen(ErrorModal(str(e)), lambda _: self._show_connection_dialog())
 
     def _start_auto_refresh(self, interval: int) -> None:
         """Start auto-refresh timer."""
@@ -728,9 +720,7 @@ class QueuedApp(App):
             local_size = local_path.stat().st_size
 
             # Show modal and wait for user decision
-            result = await self.push_screen_wait(
-                FileExistsModal(f.name, local_size, f.size)
-            )
+            result = await self.push_screen_wait(FileExistsModal(f.name, local_size, f.size))
 
             if result == "continue":
                 # Resume - add to queue, existing partial file will be used
@@ -840,7 +830,7 @@ class QueuedApp(App):
         current = self.settings_manager.settings.download_dir
         self.push_screen(DownloadDirModal(current), self._on_download_dir_result)
 
-    def _on_download_dir_result(self, path: Optional[str]) -> None:
+    def _on_download_dir_result(self, path: str | None) -> None:
         """Handle download directory change."""
         if path:
             # Expand and validate path
@@ -893,7 +883,7 @@ class QueuedApp(App):
         await asyncio.sleep(0.1)
 
         # Disconnect using pool if available, otherwise single connection
-        if hasattr(self, 'connection_pool') and self.connection_pool:
+        if hasattr(self, "connection_pool") and self.connection_pool:
             await self.connection_pool.disconnect_all()
         elif self.sftp:
             await self.sftp.disconnect()

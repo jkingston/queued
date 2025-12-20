@@ -36,8 +36,8 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/jack/queued"
-Repository = "https://github.com/jack/queued"
+Homepage = "https://github.com/jkingston/queued"
+Repository = "https://github.com/jkingston/queued"
 
 [build-system]
 requires = ["hatchling"]
@@ -52,6 +52,15 @@ target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
+ignore = [
+    "SIM102",  # Use single if - sometimes nested is clearer
+    "SIM105",  # Use contextlib.suppress - try/except is clearer
+    "SIM108",  # Use ternary - if/else is clearer for multi-line
+    "UP045",   # Optional[X] -> X | None - keep for compatibility
+]
+
+[tool.ruff.format]
+quote-style = "double"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -62,4 +71,5 @@ asyncio_default_fixture_loop_scope = "function"
 dev = [
     "pytest>=9.0.2",
     "pytest-asyncio>=1.3.0",
+    "ruff>=0.8.0",
 ]

@@ -4,7 +4,6 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
-from typing import Optional
 
 
 class TransferDirection(Enum):
@@ -34,13 +33,15 @@ class Host:
     hostname: str
     username: str
     port: int = 22
-    key_path: Optional[str] = None
-    password: Optional[str] = None
-    last_used: Optional[datetime] = None
-    last_directory: Optional[str] = None
+    key_path: str | None = None
+    password: str | None = None
+    last_used: datetime | None = None
+    last_directory: str | None = None
 
     @classmethod
-    def from_string(cls, connection_string: str, port: int = 22, key_path: Optional[str] = None) -> "Host":
+    def from_string(
+        cls, connection_string: str, port: int = 22, key_path: str | None = None
+    ) -> "Host":
         """Parse user@host connection string."""
         if "@" in connection_string:
             username, hostname = connection_string.split("@", 1)
@@ -111,8 +112,8 @@ class RemoteFile:
     path: str
     size: int
     is_dir: bool
-    mtime: Optional[datetime] = None
-    permissions: Optional[str] = None
+    mtime: datetime | None = None
+    permissions: str | None = None
 
     @property
     def size_human(self) -> str:
@@ -141,10 +142,10 @@ class Transfer:
     status: TransferStatus = TransferStatus.QUEUED
     bytes_transferred: int = 0
     speed: float = 0.0  # bytes per second
-    error: Optional[str] = None
-    started_at: Optional[datetime] = None
-    completed_at: Optional[datetime] = None
-    checksum: Optional[str] = None  # Expected checksum if known
+    error: str | None = None
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    checksum: str | None = None  # Expected checksum if known
 
     @property
     def progress(self) -> float:
@@ -167,7 +168,7 @@ class Transfer:
         return f"{speed:.1f} {units[-1]}"
 
     @property
-    def eta(self) -> Optional[str]:
+    def eta(self) -> str | None:
         """Return estimated time remaining."""
         if self.speed == 0 or self.status != TransferStatus.TRANSFERRING:
             return None
@@ -217,8 +218,12 @@ class Transfer:
             status=TransferStatus(data["status"]),
             bytes_transferred=data.get("bytes_transferred", 0),
             error=data.get("error"),
-            started_at=datetime.fromisoformat(data["started_at"]) if data.get("started_at") else None,
-            completed_at=datetime.fromisoformat(data["completed_at"]) if data.get("completed_at") else None,
+            started_at=(
+                datetime.fromisoformat(data["started_at"]) if data.get("started_at") else None
+            ),
+            completed_at=(
+                datetime.fromisoformat(data["completed_at"]) if data.get("completed_at") else None
+            ),
             checksum=data.get("checksum"),
         )
 
@@ -240,21 +245,21 @@ class TransferQueue:
         """Whether more transfers can be started."""
         return self.active_count < self.max_concurrent
 
-    def get_next_queued(self) -> Optional[Transfer]:
+    def get_next_queued(self) -> Transfer | None:
         """Get next queued transfer."""
         for t in self.transfers:
             if t.status == TransferStatus.QUEUED:
                 return t
         return None
 
-    def get_by_id(self, transfer_id: str) -> Optional[Transfer]:
+    def get_by_id(self, transfer_id: str) -> Transfer | None:
         """Get transfer by ID."""
         for t in self.transfers:
             if t.id == transfer_id:
                 return t
         return None
 
-    def get_by_remote_path(self, remote_path: str, host_key: str = "") -> Optional[Transfer]:
+    def get_by_remote_path(self, remote_path: str, host_key: str = "") -> Transfer | None:
         """Get transfer by remote file path (and optionally host).
 
         Args:
@@ -331,7 +336,7 @@ class AppSettings:
     """Application settings."""
 
     max_concurrent_transfers: int = 3
-    bandwidth_limit: Optional[int] = None  # bytes per second, None = unlimited
+    bandwidth_limit: int | None = None  # bytes per second, None = unlimited
     download_dir: str = "~/Downloads"
     auto_refresh_interval: int = 30  # seconds, 0 = disabled
     verify_checksums: bool = True

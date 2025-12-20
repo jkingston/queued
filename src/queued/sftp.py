@@ -1,13 +1,19 @@
 """Async SFTP client wrapper using asyncssh."""
 
+from __future__ import annotations
+
 import asyncio
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
-from typing import AsyncIterator, Callable, Optional
+from typing import TYPE_CHECKING
 
 import asyncssh
 
 from queued.models import Host, RemoteFile
+
+if TYPE_CHECKING:
+    from queued.config import HostCache
 
 
 class SFTPError(Exception):
@@ -23,7 +29,7 @@ CHUNK_SIZE = 32768
 class BandwidthLimiter:
     """Async bandwidth limiter using token bucket algorithm."""
 
-    def __init__(self, limit: Optional[int] = None):
+    def __init__(self, limit: int | None = None):
         """Initialize limiter with bytes per second limit (None = unlimited)."""
         self.limit = limit
         self._last_check_time = asyncio.get_event_loop().time()
@@ -53,8 +59,8 @@ class SFTPClient:
 
     def __init__(self, host: Host):
         self.host = host
-        self._conn: Optional[asyncssh.SSHClientConnection] = None
-        self._sftp: Optional[asyncssh.SFTPClient] = None
+        self._conn: asyncssh.SSHClientConnection | None = None
+        self._sftp: asyncssh.SFTPClient | None = None
         self._connected = False
 
     @property
@@ -85,7 +91,9 @@ class SFTPClient:
             self._sftp = await self._conn.start_sftp_client()
             self._connected = True
         except asyncssh.HostKeyNotVerifiable as e:
-            raise SFTPError(f"Host key verification failed: {e}. Add host to ~/.ssh/known_hosts") from e
+            raise SFTPError(
+                f"Host key verification failed: {e}. Add host to ~/.ssh/known_hosts"
+            ) from e
         except asyncssh.Error as e:
             raise SFTPError(f"Failed to connect: {e}") from e
         except OSError as e:
@@ -119,6 +127,7 @@ class SFTPClient:
                     mtime = datetime.fromtimestamp(attrs.mtime)
 
                 full_path = f"{path}/{entry.filename}" if path != "." else entry.filename
+                perms = self._format_permissions(attrs.permissions) if attrs.permissions else None
                 files.append(
                     RemoteFile(
                         name=entry.filename,
@@ -126,7 +135,7 @@ class SFTPClient:
                         size=attrs.size or 0,
                         is_dir=attrs.type == asyncssh.FILEXFER_TYPE_DIRECTORY,
                         mtime=mtime,
-                        permissions=self._format_permissions(attrs.permissions) if attrs.permissions else None,
+                        permissions=perms,
                     )
                 )
             # Sort: directories first, then by name
@@ -156,13 +165,14 @@ class SFTPClient:
             if attrs.mtime:
                 mtime = datetime.fromtimestamp(attrs.mtime)
 
+            perms = self._format_permissions(attrs.permissions) if attrs.permissions else None
             return RemoteFile(
                 name=Path(path).name,
                 path=path,
                 size=attrs.size or 0,
                 is_dir=attrs.type == asyncssh.FILEXFER_TYPE_DIRECTORY,
                 mtime=mtime,
-                permissions=self._format_permissions(attrs.permissions) if attrs.permissions else None,
+                permissions=perms,
             )
         except asyncssh.SFTPError as e:
             raise SFTPError(f"Failed to get file info: {e}") from e
@@ -171,9 +181,9 @@ class SFTPClient:
         self,
         remote_path: str,
         local_path: str,
-        progress_callback: Optional[Callable[[int, int], None]] = None,
+        progress_callback: Callable[[int, int], None] | None = None,
         resume_offset: int = 0,
-        bandwidth_limit: Optional[int] = None,
+        bandwidth_limit: int | None = None,
     ) -> None:
         """
         Download a file from the remote server.
@@ -230,8 +240,8 @@ class SFTPClient:
         self,
         local_path: str,
         remote_path: str,
-        progress_callback: Optional[Callable[[int, int], None]] = None,
-        bandwidth_limit: Optional[int] = None,
+        progress_callback: Callable[[int, int], None] | None = None,
+        bandwidth_limit: int | None = None,
     ) -> None:
         """
         Upload a file to the remote server.
@@ -294,7 +304,7 @@ class SFTPClient:
         except asyncssh.SFTPError:
             return False
 
-    async def get_checksum(self, path: str, algorithm: str = "md5") -> Optional[str]:
+    async def get_checksum(self, path: str, algorithm: str = "md5") -> str | None:
         """
         Try to get checksum using SFTP check-file extension.
         Returns None if not supported by server.
@@ -325,14 +335,13 @@ class SFTPClient:
 class SFTPConnectionPool:
     """Manages SFTP connections to multiple hosts."""
 
-    def __init__(self, host_cache: "HostCache"):
+    def __init__(self, host_cache: HostCache):
         """
         Initialize connection pool.
 
         Args:
             host_cache: HostCache instance for looking up host credentials
         """
-        from queued.config import HostCache  # Avoid circular import
 
         self._connections: dict[str, SFTPClient] = {}
         self._host_cache = host_cache

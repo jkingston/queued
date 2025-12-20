@@ -1,7 +1,6 @@
 """Remote file browser widget."""
 
 from pathlib import PurePosixPath
-from typing import Optional
 
 from textual import work
 from textual.app import ComposeResult
@@ -71,8 +70,8 @@ class FileBrowser(Static):
 
     def __init__(
         self,
-        sftp_client: Optional[SFTPClient] = None,
-        id: Optional[str] = None,
+        sftp_client: SFTPClient | None = None,
+        id: str | None = None,
     ) -> None:
         super().__init__(id=id)
         self.sftp = sftp_client
@@ -80,7 +79,7 @@ class FileBrowser(Static):
         self._files: list[RemoteFile] = []
         self._selected: set[str] = set()  # Set of selected file paths
         self._loading = False
-        self._transfer_queue: Optional[TransferQueue] = None
+        self._transfer_queue: TransferQueue | None = None
 
     def compose(self) -> ComposeResult:
         with Vertical():
@@ -160,7 +159,8 @@ class FileBrowser(Static):
                         icon = "[dim]◌[/]"  # Has queued files
                 else:
                     transfer = self._transfer_queue.get_by_remote_path(f.path)
-                    if transfer and transfer.status not in (TransferStatus.COMPLETED, TransferStatus.FAILED):
+                    terminal_statuses = (TransferStatus.COMPLETED, TransferStatus.FAILED)
+                    if transfer and transfer.status not in terminal_statuses:
                         if transfer.status == TransferStatus.TRANSFERRING:
                             icon = "[green]↓[/]"  # Downloading
                         elif transfer.status == TransferStatus.PAUSED:

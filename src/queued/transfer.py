@@ -4,9 +4,9 @@ import asyncio
 import hashlib
 import re
 import uuid
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
-from typing import Callable, Optional
 
 from queued.config import QueueCache, TransferStateCache
 from queued.models import (
@@ -26,12 +26,12 @@ class TransferManager:
 
     def __init__(
         self,
-        sftp_client: Optional[SFTPClient] = None,
-        settings: Optional[AppSettings] = None,
-        on_progress: Optional[Callable[[Transfer], None]] = None,
-        on_status_change: Optional[Callable[[Transfer], None]] = None,
-        connection_pool: Optional[SFTPConnectionPool] = None,
-        queue_cache: Optional[QueueCache] = None,
+        sftp_client: SFTPClient | None = None,
+        settings: AppSettings | None = None,
+        on_progress: Callable[[Transfer], None] | None = None,
+        on_status_change: Callable[[Transfer], None] | None = None,
+        connection_pool: SFTPConnectionPool | None = None,
+        queue_cache: QueueCache | None = None,
     ):
         self.sftp = sftp_client  # Primary client for file browser operations
         self.pool = connection_pool  # For multi-server downloads
@@ -57,9 +57,9 @@ class TransferManager:
     def add_download(
         self,
         remote_file: RemoteFile,
-        host: Optional[Host] = None,
-        local_dir: Optional[str] = None,
-    ) -> Optional[Transfer]:
+        host: Host | None = None,
+        local_dir: str | None = None,
+    ) -> Transfer | None:
         """Add a file to the download queue.
 
         Returns None if the file is already in the queue (duplicate prevention).
@@ -334,7 +334,7 @@ class TransferManager:
 
     async def _check_sfv(
         self, sfv_path: str, filename: str, local_path: str, sftp: SFTPClient
-    ) -> Optional[bool]:
+    ) -> bool | None:
         """Check file against SFV (Simple File Verification) file."""
         try:
             content = await sftp.read_file(sfv_path)
@@ -356,7 +356,7 @@ class TransferManager:
 
     async def _check_md5(
         self, md5_path: str, filename: str, local_path: str, sftp: SFTPClient
-    ) -> Optional[bool]:
+    ) -> bool | None:
         """Check file against MD5 checksum file."""
         try:
             content = await sftp.read_file(md5_path)
