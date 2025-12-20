@@ -133,61 +133,66 @@ class FileBrowser(Static):
         self.load_directory(self.current_path)
 
     def _update_table(self) -> None:
-        """Update the data table with current files."""
+        """Update the data table with current files using in-place updates."""
         table = self.query_one("#file-table", DataTable)
+        current_keys = {key.value for key in table.rows}
 
-        # Save current cursor position by key (file path)
-        saved_key = None
-        if table.cursor_row is not None:
-            keys = list(table.rows.keys())
-            if table.cursor_row < len(keys):
-                saved_key = keys[table.cursor_row].value
-
-        table.clear()
-
-        # Add parent directory entry if not at root
+        # Build new key set (including ".." if not at root)
+        new_keys = {f.path for f in self._files}
         if self.current_path != "/":
+            new_keys.add("..")
+
+        # Remove rows that no longer exist
+        for key in current_keys - new_keys:
+            table.remove_row(key)
+
+        # Add ".." entry if needed (static content, no update needed)
+        if self.current_path != "/" and ".." not in current_keys:
             table.add_row("", "..", "<DIR>", "", key="..")
 
+        # Update or add file rows
         for f in self._files:
-            # Determine icon based on queue status or selection
-            icon = ""
-            if self._transfer_queue:
-                if f.is_dir:
-                    # Check if directory contains queued files
-                    if self._transfer_queue.has_queued_in_directory(f.path):
-                        icon = "[dim]◌[/]"  # Has queued files
-                else:
-                    transfer = self._transfer_queue.get_by_remote_path(f.path)
-                    terminal_statuses = (TransferStatus.COMPLETED, TransferStatus.FAILED)
-                    if transfer and transfer.status not in terminal_statuses:
-                        if transfer.status == TransferStatus.TRANSFERRING:
-                            icon = "[green]↓[/]"  # Downloading
-                        elif transfer.status == TransferStatus.PAUSED:
-                            icon = "[yellow]⏸[/]"  # Paused
-                        elif transfer.status == TransferStatus.STOPPED:
-                            icon = "[dim yellow]⏹[/]"  # Stopped (queue stopped)
-                        else:  # QUEUED or other pending states
-                            icon = "[dim]◌[/]"  # Queued
-
-            # Fall back to selection indicator
-            if not icon and f.path in self._selected:
-                icon = "[cyan]>>[/]"
-
-            name = f"[bold blue]{f.name}/[/]" if f.is_dir else f.name
-            size = f.size_human
-            mtime = f.mtime.strftime("%Y-%m-%d %H:%M") if f.mtime else ""
-            table.add_row(icon, name, size, mtime, key=f.path)
+            row_data = self._build_file_row(f)
+            if f.path in current_keys:
+                # Update existing row cells
+                for col_idx, value in enumerate(row_data):
+                    col_key = list(table.columns.keys())[col_idx]
+                    table.update_cell(f.path, col_key, value)
+            else:
+                # Add new row
+                table.add_row(*row_data, key=f.path)
 
         self._update_status(f"{len(self._files)} items")
 
-        # Restore cursor position
-        if saved_key is not None:
-            keys = list(table.rows.keys())
-            for i, key in enumerate(keys):
-                if key.value == saved_key:
-                    table.move_cursor(row=i)
-                    break
+    def _build_file_row(self, f: RemoteFile) -> tuple:
+        """Build row data tuple for a file."""
+        icon = self._get_file_icon(f)
+        name = f"[bold blue]{f.name}/[/]" if f.is_dir else f.name
+        size = f.size_human
+        mtime = f.mtime.strftime("%Y-%m-%d %H:%M") if f.mtime else ""
+        return (icon, name, size, mtime)
+
+    def _get_file_icon(self, f: RemoteFile) -> str:
+        """Get icon for file based on queue status and selection."""
+        if self._transfer_queue:
+            if f.is_dir:
+                if self._transfer_queue.has_queued_in_directory(f.path):
+                    return "[dim]◌[/]"  # Has queued files
+            else:
+                transfer = self._transfer_queue.get_by_remote_path(f.path)
+                terminal_statuses = (TransferStatus.COMPLETED, TransferStatus.FAILED)
+                if transfer and transfer.status not in terminal_statuses:
+                    if transfer.status == TransferStatus.TRANSFERRING:
+                        return "[green]↓[/]"  # Downloading
+                    elif transfer.status == TransferStatus.PAUSED:
+                        return "[yellow]⏸[/]"  # Paused
+                    elif transfer.status == TransferStatus.STOPPED:
+                        return "[dim yellow]⏹[/]"  # Stopped (queue stopped)
+                    else:  # QUEUED or other pending states
+                        return "[dim]◌[/]"  # Queued
+        if f.path in self._selected:
+            return "[cyan]>>[/]"
+        return ""
 
     def _update_path_label(self) -> None:
         """Update the path label."""

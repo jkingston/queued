@@ -85,39 +85,41 @@ class TransferList(Static):
         self.refresh_display()
 
     def refresh_display(self) -> None:
-        """Refresh the transfer list display."""
+        """Refresh the transfer list display using in-place updates."""
         if not self.queue:
             return
 
         table = self.query_one("#transfer-table", DataTable)
-        table.clear()
+        current_keys = {key.value for key in table.rows}
+        new_keys = {t.id for t in self.queue.transfers}
 
+        # Remove rows that no longer exist
+        for key in current_keys - new_keys:
+            table.remove_row(key)
+
+        # Update or add rows
         for transfer in self.queue.transfers:
-            # Filename (auto-sizes to available width)
-            filename = transfer.filename
-
-            # Progress bar as text
-            progress = self._make_progress_bar(transfer.progress)
-
-            # Speed (separate from ETA)
-            speed = transfer.speed_human if transfer.status == TransferStatus.TRANSFERRING else ""
-
-            # ETA as separate column
-            eta = transfer.eta or "" if transfer.status == TransferStatus.TRANSFERRING else ""
-
-            # Status
-            status = self._format_status(transfer)
-
-            table.add_row(
-                filename,
-                progress,
-                speed,
-                eta,
-                status,
-                key=transfer.id,
-            )
+            row_data = self._build_row_data(transfer)
+            if transfer.id in current_keys:
+                # Update existing row cells
+                for col_idx, value in enumerate(row_data):
+                    col_key = list(table.columns.keys())[col_idx]
+                    table.update_cell(transfer.id, col_key, value)
+            else:
+                # Add new row
+                table.add_row(*row_data, key=transfer.id)
 
         self._update_status()
+
+    def _build_row_data(self, transfer: Transfer) -> tuple:
+        """Build row data tuple for a transfer."""
+        return (
+            transfer.filename,
+            self._make_progress_bar(transfer.progress),
+            transfer.speed_human if transfer.status == TransferStatus.TRANSFERRING else "",
+            transfer.eta or "" if transfer.status == TransferStatus.TRANSFERRING else "",
+            self._format_status(transfer),
+        )
 
     def _make_progress_bar(self, percent: float) -> str:
         """Create a text-based progress bar."""
