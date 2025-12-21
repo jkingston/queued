@@ -28,6 +28,8 @@ class FileBrowser(Static):
         Binding("d", "download", "Download"),
         Binding("j", "cursor_down", show=False),
         Binding("k", "cursor_up", show=False),
+        Binding("ctrl+f", "page_down", show=False),
+        Binding("ctrl+b", "page_up", show=False),
     ]
 
     DEFAULT_CSS = """
@@ -314,6 +316,16 @@ class FileBrowser(Static):
         """Move cursor up in file list."""
         table = self.query_one("#file-table", DataTable)
         table.action_cursor_up()
+
+    def action_page_down(self) -> None:
+        """Move down one page in file list."""
+        table = self.query_one("#file-table", DataTable)
+        table.action_page_down()
+
+    def action_page_up(self) -> None:
+        """Move up one page in file list."""
+        table = self.query_one("#file-table", DataTable)
+        table.action_page_up()
 
     def _emit_selection(self) -> None:
         """Emit FileSelected message with current selection."""

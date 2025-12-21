@@ -29,6 +29,8 @@ class TransferList(Static):
         Binding("shift+down", "move_down", "Move Down", key_display="⇧↓/J"),
         Binding("K", "move_up", show=False),
         Binding("J", "move_down", show=False),
+        Binding("ctrl+f", "page_down", show=False),
+        Binding("ctrl+b", "page_up", show=False),
     ]
 
     DEFAULT_CSS = """
@@ -250,6 +252,16 @@ class TransferList(Static):
         """Move cursor up in transfer list."""
         table = self.query_one("#transfer-table", DataTable)
         table.action_cursor_up()
+
+    def action_page_down(self) -> None:
+        """Move down one page in transfer list."""
+        table = self.query_one("#transfer-table", DataTable)
+        table.action_page_down()
+
+    def action_page_up(self) -> None:
+        """Move up one page in transfer list."""
+        table = self.query_one("#transfer-table", DataTable)
+        table.action_page_up()
 
     def action_move_up(self) -> None:
         """Move selected transfer up in queue."""
