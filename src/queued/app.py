@@ -80,6 +80,10 @@ class HelpScreen(ModalScreen):
             yield Label("↑↓/jk     Navigate transfers", classes="help-item")
             yield Label("⇧↑↓/JK    Reorder in queue", classes="help-item")
 
+            yield Label("Bandwidth", classes="help-section")
+            yield Label("t         Toggle speed limit on/off", classes="help-item")
+            yield Label("T         Cycle through presets", classes="help-item")
+
             yield Label("General", classes="help-section")
             yield Label("Tab       Switch pane focus", classes="help-item")
             yield Label("?/F1      Show this help", classes="help-item")
@@ -622,6 +626,10 @@ class QueuedApp(App):
 
             # Update status bar
             status_bar.set_connection(str(host), True)
+            status_bar.set_bandwidth_limit(
+                self.transfer_manager.bandwidth_limit,
+                self.transfer_manager.bandwidth_limit_enabled,
+            )
             self.title = f"Queued - {host}"
 
             # Show message if we loaded persisted transfers
@@ -652,10 +660,14 @@ class QueuedApp(App):
         transfer_list = self.query_one("#transfer-list", TransferList)
         transfer_list.update_transfer(transfer)
 
-        # Update status bar speed
+        # Update status bar speed and bandwidth limit
         if self.transfer_manager:
             status_bar = self.query_one("#status-bar", StatusBar)
             status_bar.set_speeds(self.transfer_manager.total_speed)
+            status_bar.set_bandwidth_limit(
+                self.transfer_manager.bandwidth_limit,
+                self.transfer_manager.bandwidth_limit_enabled,
+            )
 
     def _on_transfer_status_change(self, transfer: Transfer) -> None:
         """Handle transfer status changes."""

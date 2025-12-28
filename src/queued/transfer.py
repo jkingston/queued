@@ -203,6 +203,9 @@ class TransferManager:
 
     async def _do_download(self, transfer: Transfer) -> None:
         """Execute a download."""
+        # Register with global limiter
+        await self._bandwidth_limiter.register(transfer.id)
+
         try:
             # Get the appropriate SFTP connection for this transfer
             sftp = await self._get_sftp_for_transfer(transfer)
@@ -238,12 +241,16 @@ class TransferManager:
                         total,
                     )
 
+            # Use global limiter if enabled, otherwise no limiting
+            global_limiter = self._bandwidth_limiter if self._bandwidth_limit_enabled else None
+
             await sftp.download(
                 transfer.remote_path,
                 transfer.local_path,
                 progress_callback=progress_callback,
                 resume_offset=resume_offset,
-                bandwidth_limit=self.settings.bandwidth_limit,
+                global_limiter=global_limiter,
+                transfer_id=transfer.id,
             )
 
             # Verify if checksums available
@@ -287,12 +294,16 @@ class TransferManager:
             transfer.error = f"Invalid data: {e}"
             self._persist_queue()
         finally:
+            await self._bandwidth_limiter.unregister(transfer.id)
             self._tasks.pop(transfer.id, None)
             self._speed_trackers.pop(transfer.id, None)
             self._notify_status_change(transfer)
 
     async def _do_upload(self, transfer: Transfer) -> None:
         """Execute an upload."""
+        # Register with global limiter
+        await self._bandwidth_limiter.register(transfer.id)
+
         try:
             # Get the appropriate SFTP connection for this transfer
             sftp = await self._get_sftp_for_transfer(transfer)
@@ -309,11 +320,15 @@ class TransferManager:
                     )
                 self._notify_progress(transfer)
 
+            # Use global limiter if enabled, otherwise no limiting
+            global_limiter = self._bandwidth_limiter if self._bandwidth_limit_enabled else None
+
             await sftp.upload(
                 transfer.local_path,
                 transfer.remote_path,
                 progress_callback=progress_callback,
-                bandwidth_limit=self.settings.bandwidth_limit,
+                global_limiter=global_limiter,
+                transfer_id=transfer.id,
             )
 
             transfer.status = TransferStatus.COMPLETED
@@ -342,6 +357,7 @@ class TransferManager:
             transfer.error = f"Invalid data: {e}"
             self._persist_queue()
         finally:
+            await self._bandwidth_limiter.unregister(transfer.id)
             self._tasks.pop(transfer.id, None)
             self._speed_trackers.pop(transfer.id, None)
             self._notify_status_change(transfer)
@@ -558,6 +574,7 @@ class TransferManager:
     def total_speed(self) -> float:
         """Total download speed across all active transfers."""
         return sum(t.speed for t in self.queue.transfers if t.status == TransferStatus.TRANSFERRING)
+
 
 
 class SpeedTracker:

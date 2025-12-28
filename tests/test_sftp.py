@@ -8,7 +8,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from queued.models import Host
-from queued.sftp import BandwidthLimiter, SFTPClient, SFTPConnectionPool, SFTPError
+from queued.sftp import (
+    BandwidthLimiter,
+    SFTPClient,
+    SFTPConnectionPool,
+    SFTPError,
+)
 
 
 class TestSFTPClientConnection:

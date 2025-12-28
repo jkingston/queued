@@ -469,3 +469,5 @@ class TestTransferSerialization:
         assert restored.bytes_transferred == transfer.bytes_transferred
         assert restored.started_at == transfer.started_at
         assert restored.checksum == transfer.checksum
+
+

@@ -1,6 +1,5 @@
 """Status bar widget showing connection info and global stats."""
 
-from textual.app import ComposeResult
 from textual.widgets import Static
 
 
@@ -15,32 +14,22 @@ class StatusBar(Static):
         color: $text;
         padding: 0 1;
     }
-
-    StatusBar .status-left {
-        width: 1fr;
-    }
-
-    StatusBar .status-right {
-        width: auto;
-    }
     """
 
     def __init__(self, id: str | None = None) -> None:
-        super().__init__(id=id)
+        super().__init__("", id=id)
         self._host: str = ""
         self._connected: bool = False
         self._download_speed: float = 0.0
         self._upload_speed: float = 0.0
         self._download_dir: str = ""
-
-    def compose(self) -> ComposeResult:
-        yield Static("", classes="status-left", id="status-left")
-        yield Static("", classes="status-right", id="status-right")
+        self._temp_message: str | None = None
 
     def set_connection(self, host: str, connected: bool) -> None:
         """Update connection status."""
         self._host = host
         self._connected = connected
+        self._temp_message = None
         self._update()
 
     def set_speeds(self, download: float, upload: float = 0.0) -> None:
@@ -67,35 +56,37 @@ class StatusBar(Static):
 
     def _update(self) -> None:
         """Update the status bar display."""
-        left = self.query_one("#status-left", Static)
-        right = self.query_one("#status-right", Static)
-
-        # Left side: connection info + download dir
-        if self._connected:
-            status = f"[green]●[/] {self._host}"
+        # Left side: connection info + download dir (or temp message)
+        if self._temp_message:
+            left = self._temp_message
+        elif self._connected:
+            left = f"[green]●[/] {self._host}"
+            if self._download_dir:
+                dir_display = self._download_dir
+                if len(dir_display) > 30:
+                    dir_display = "..." + dir_display[-27:]
+                left += f" → {dir_display}"
         else:
-            status = "[red]●[/] Disconnected"
-
-        if self._download_dir:
-            # Truncate long paths with ellipsis
-            dir_display = self._download_dir
-            if len(dir_display) > 30:
-                dir_display = "..." + dir_display[-27:]
-            status += f" → {dir_display}"
-
-        left.update(status)
+            left = "[red]●[/] Disconnected"
 
         # Right side: speeds
-        parts = []
-        if self._download_speed > 0:
-            parts.append(f"↓ {self._format_speed(self._download_speed)}")
-        if self._upload_speed > 0:
-            parts.append(f"↑ {self._format_speed(self._upload_speed)}")
+        right_parts = []
 
-        right.update(" | ".join(parts) if parts else "")
+        if self._download_speed > 0:
+            right_parts.append(f"↓ {self._format_speed(self._download_speed)}")
+        if self._upload_speed > 0:
+            right_parts.append(f"↑ {self._format_speed(self._upload_speed)}")
+
+        right = " | ".join(right_parts)
+
+        # Combine: left side, then right side at the end
+        if right:
+            self.update(f"{left}  [b]{right}[/b]")
+        else:
+            self.update(left)
 
     def show_message(self, message: str, error: bool = False) -> None:
         """Show a temporary message."""
-        left = self.query_one("#status-left", Static)
         color = "red" if error else "yellow"
-        left.update(f"[{color}]{message}[/]")
+        self._temp_message = f"[{color}]{message}[/]"
+        self._update()
