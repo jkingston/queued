@@ -75,8 +75,7 @@ class TestTransferListCursor:
                 f"Cursor jumped from row {cursor_before} to {cursor_after}"
             )
             assert transfer_id_after == transfer_id_before, (
-                f"Cursor was on transfer {transfer_id_before}, "
-                f"now on {transfer_id_after}"
+                f"Cursor was on transfer {transfer_id_before}, now on {transfer_id_after}"
             )
 
     async def test_cursor_preserved_after_multiple_refreshes(self):

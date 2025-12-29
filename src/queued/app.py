@@ -799,9 +799,7 @@ class QueuedApp(App):
                 all_files.append(entry)
         return all_files
 
-    def _compute_local_path(
-        self, remote_file: RemoteFile, base_dir: str | None = None
-    ) -> Path:
+    def _compute_local_path(self, remote_file: RemoteFile, base_dir: str | None = None) -> Path:
         """Compute local path for a remote file (mirrors add_download logic)."""
         download_dir = Path(self.settings_manager.settings.download_dir).expanduser()
         if base_dir:

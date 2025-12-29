@@ -576,7 +576,6 @@ class TransferManager:
         return sum(t.speed for t in self.queue.transfers if t.status == TransferStatus.TRANSFERRING)
 
 
-
 class SpeedTracker:
     """Tracks transfer speed with smoothing."""
 

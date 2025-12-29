@@ -196,8 +196,6 @@ class SFTPClient:
         progress_callback: Callable[[int, int], None] | None = None,
         resume_offset: int = 0,
         bandwidth_limit: int | None = None,
-        global_limiter: GlobalBandwidthLimiter | None = None,
-        transfer_id: str | None = None,
     ) -> None:
         """
         Download a file from the remote server.
@@ -207,16 +205,12 @@ class SFTPClient:
             local_path: Path to save locally
             progress_callback: Callback(bytes_transferred, total_size)
             resume_offset: Byte offset to resume from
-            bandwidth_limit: Max bytes per second (None = unlimited, legacy)
-            global_limiter: Shared limiter for global bandwidth control
-            transfer_id: Transfer ID for global limiter tracking
+            bandwidth_limit: Max bytes per second (None = unlimited)
         """
         if not self._sftp:
             raise SFTPError("Not connected")
 
-        # Use global limiter if provided, otherwise fall back to per-transfer
-        use_global = global_limiter is not None and transfer_id is not None
-        local_limiter = None if use_global else BandwidthLimiter(bandwidth_limit)
+        limiter = BandwidthLimiter(bandwidth_limit)
 
         try:
             # Get file size
@@ -244,11 +238,8 @@ class SFTPClient:
                         local_file.write(chunk)
                         bytes_transferred += len(chunk)
 
-                        # Throttle using appropriate limiter
-                        if use_global:
-                            await global_limiter.throttle(transfer_id, len(chunk))
-                        elif local_limiter:
-                            await local_limiter.throttle(len(chunk))
+                        # Throttle if bandwidth limit is set
+                        await limiter.throttle(len(chunk))
 
                         if progress_callback:
                             progress_callback(bytes_transferred, total_size)
@@ -264,8 +255,6 @@ class SFTPClient:
         remote_path: str,
         progress_callback: Callable[[int, int], None] | None = None,
         bandwidth_limit: int | None = None,
-        global_limiter: GlobalBandwidthLimiter | None = None,
-        transfer_id: str | None = None,
     ) -> None:
         """
         Upload a file to the remote server.
@@ -274,16 +263,12 @@ class SFTPClient:
             local_path: Path to local file
             remote_path: Path on remote server
             progress_callback: Callback(bytes_transferred, total_size)
-            bandwidth_limit: Max bytes per second (None = unlimited, legacy)
-            global_limiter: Shared limiter for global bandwidth control
-            transfer_id: Transfer ID for global limiter tracking
+            bandwidth_limit: Max bytes per second (None = unlimited)
         """
         if not self._sftp:
             raise SFTPError("Not connected")
 
-        # Use global limiter if provided, otherwise fall back to per-transfer
-        use_global = global_limiter is not None and transfer_id is not None
-        local_limiter = None if use_global else BandwidthLimiter(bandwidth_limit)
+        limiter = BandwidthLimiter(bandwidth_limit)
 
         try:
             local_file_path = Path(local_path)
@@ -304,11 +289,8 @@ class SFTPClient:
                         await remote_file.write(chunk)
                         bytes_transferred += len(chunk)
 
-                        # Throttle using appropriate limiter
-                        if use_global:
-                            await global_limiter.throttle(transfer_id, len(chunk))
-                        elif local_limiter:
-                            await local_limiter.throttle(len(chunk))
+                        # Throttle if bandwidth limit is set
+                        await limiter.throttle(len(chunk))
 
                         if progress_callback:
                             progress_callback(bytes_transferred, total_size)
