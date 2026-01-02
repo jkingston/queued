@@ -626,10 +626,6 @@ class QueuedApp(App):
 
             # Update status bar
             status_bar.set_connection(str(host), True)
-            status_bar.set_bandwidth_limit(
-                self.transfer_manager.bandwidth_limit,
-                self.transfer_manager.bandwidth_limit_enabled,
-            )
             self.title = f"Queued - {host}"
 
             # Show message if we loaded persisted transfers
@@ -660,14 +656,10 @@ class QueuedApp(App):
         transfer_list = self.query_one("#transfer-list", TransferList)
         transfer_list.update_transfer(transfer)
 
-        # Update status bar speed and bandwidth limit
+        # Update status bar speed
         if self.transfer_manager:
             status_bar = self.query_one("#status-bar", StatusBar)
             status_bar.set_speeds(self.transfer_manager.total_speed)
-            status_bar.set_bandwidth_limit(
-                self.transfer_manager.bandwidth_limit,
-                self.transfer_manager.bandwidth_limit_enabled,
-            )
 
     def _on_transfer_status_change(self, transfer: Transfer) -> None:
         """Handle transfer status changes."""
