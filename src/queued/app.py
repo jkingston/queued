@@ -2,7 +2,7 @@
 
 import asyncio
 from pathlib import Path, PurePosixPath
-from typing import Optional
+from typing import Optional, TypeVar
 
 from textual import work
 from textual.app import App, ComposeResult
@@ -18,6 +18,32 @@ from queued.transfer import TransferManager
 from queued.widgets.file_browser import FileBrowser
 from queued.widgets.status_bar import StatusBar
 from queued.widgets.transfer_list import TransferList
+
+
+ModalResultT = TypeVar("ModalResultT")
+
+
+class NavigableModalScreen(ModalScreen[ModalResultT]):
+    """Base modal screen with arrow/hjkl navigation between focusable widgets."""
+
+    BINDINGS = [
+        Binding("left", "focus_previous", "Previous", show=False),
+        Binding("right", "focus_next", "Next", show=False),
+        Binding("h", "focus_previous", "Previous", show=False),
+        Binding("l", "focus_next", "Next", show=False),
+        Binding("up", "focus_previous", "Previous", show=False),
+        Binding("down", "focus_next", "Next", show=False),
+        Binding("j", "focus_next", "Next", show=False),
+        Binding("k", "focus_previous", "Previous", show=False),
+    ]
+
+    def action_focus_next(self) -> None:
+        """Move focus to the next focusable widget."""
+        self.focus_next()
+
+    def action_focus_previous(self) -> None:
+        """Move focus to the previous focusable widget."""
+        self.focus_previous()
 
 
 class HelpScreen(ModalScreen):
@@ -90,10 +116,11 @@ class HelpScreen(ModalScreen):
             yield Label("q         Quit (saves queue)", classes="help-item")
 
 
-class ErrorModal(ModalScreen[None]):
+class ErrorModal(NavigableModalScreen[None]):
     """Modal for displaying error messages."""
 
     BINDINGS = [
+        *NavigableModalScreen.BINDINGS,
         Binding("escape", "dismiss", "Close"),
         Binding("enter", "dismiss", "Close"),
     ]
@@ -145,10 +172,11 @@ class ErrorModal(ModalScreen[None]):
         self.dismiss(None)
 
 
-class FileExistsModal(ModalScreen[Optional[str]]):
+class FileExistsModal(NavigableModalScreen[Optional[str]]):
     """Modal for handling file conflicts during download."""
 
     BINDINGS = [
+        *NavigableModalScreen.BINDINGS,
         Binding("escape", "cancel", "Cancel"),
     ]
 
@@ -177,6 +205,24 @@ class FileExistsModal(ModalScreen[Optional[str]]):
         margin-bottom: 0;
     }
 
+    FileExistsModal .verify-result {
+        margin-top: 1;
+        padding: 0 1;
+        text-align: center;
+    }
+
+    FileExistsModal .verify-result.success {
+        color: $success;
+    }
+
+    FileExistsModal .verify-result.warning {
+        color: $warning;
+    }
+
+    FileExistsModal .verify-result.error {
+        color: $error;
+    }
+
     FileExistsModal .button-row {
         margin-top: 1;
         height: auto;
@@ -188,13 +234,29 @@ class FileExistsModal(ModalScreen[Optional[str]]):
     }
     """
 
-    def __init__(self, filename: str, local_size: int, remote_size: int) -> None:
+    def __init__(
+        self,
+        filename: str,
+        local_size: int,
+        remote_size: int,
+        remote_path: str | None = None,
+        local_path: str | None = None,
+        sftp: "SFTPClient | None" = None,
+    ) -> None:
         super().__init__()
         self.filename = filename
         self.local_size = local_size
         self.remote_size = remote_size
+        self.remote_path = remote_path
+        self.local_path = local_path
+        self.sftp = sftp
         # Only allow continue (resume) if remote file is larger than local
         self.can_continue = remote_size > local_size
+        # Can verify if file appears complete and we have sftp connection
+        self.can_verify = not self.can_continue and sftp is not None
+        # Verification state
+        self._verifying = False
+        self._verify_result: tuple[bool, str] | None = None
 
     def compose(self) -> ComposeResult:
         with Container():
@@ -207,11 +269,16 @@ class FileExistsModal(ModalScreen[Optional[str]]):
                 remaining = self._format_size(self.remote_size - self.local_size)
                 yield Label(f"Resume available: {remaining} remaining", classes="file-info")
             else:
-                yield Label("Resume not available (local file >= remote size)", classes="file-info")
+                yield Label("File appears complete", classes="file-info")
+
+            # Placeholder for verification result
+            yield Label("", id="verify-result", classes="verify-result")
 
             with Horizontal(classes="button-row"):
                 if self.can_continue:
                     yield Button("Continue", variant="primary", id="continue-btn")
+                if self.can_verify:
+                    yield Button("Verify", variant="default", id="verify-btn")
                 yield Button("Replace", variant="warning", id="replace-btn")
                 yield Button("Cancel", id="cancel-btn")
 
@@ -230,17 +297,65 @@ class FileExistsModal(ModalScreen[Optional[str]]):
             self.dismiss("continue")
         elif event.button.id == "replace-btn":
             self.dismiss("replace")
+        elif event.button.id == "verify-btn":
+            self._start_verification()
         else:
             self.dismiss(None)
+
+    def _start_verification(self) -> None:
+        """Start async verification."""
+        if self._verifying:
+            return
+        self._verifying = True
+        self._update_verify_ui("Verifying...", "warning")
+        self._disable_buttons(True)
+        self.run_worker(self._do_verify(), exclusive=True)
+
+    async def _do_verify(self) -> None:
+        """Run verification and update UI with result."""
+        from queued.transfer import verify_file
+
+        if not self.sftp or not self.remote_path or not self.local_path:
+            self._verify_result = (False, "Missing verification parameters")
+        else:
+            self._verify_result = await verify_file(
+                self.remote_path, self.local_path, self.remote_size, self.sftp
+            )
+
+        self._verifying = False
+        success, message = self._verify_result
+
+        if success:
+            if "size match only" in message:
+                self._update_verify_ui(message, "warning")
+            else:
+                self._update_verify_ui(message, "success")
+        else:
+            self._update_verify_ui(message, "error")
+
+        self._disable_buttons(False)
+
+    def _update_verify_ui(self, message: str, style: str) -> None:
+        """Update the verification result label."""
+        result_label = self.query_one("#verify-result", Label)
+        result_label.update(message)
+        result_label.remove_class("success", "warning", "error")
+        result_label.add_class(style)
+
+    def _disable_buttons(self, disabled: bool) -> None:
+        """Enable or disable all buttons."""
+        for button in self.query(Button):
+            button.disabled = disabled
 
     def action_cancel(self) -> None:
         self.dismiss(None)
 
 
-class DownloadDirModal(ModalScreen[Optional[str]]):
+class DownloadDirModal(NavigableModalScreen[Optional[str]]):
     """Modal for changing download directory."""
 
     BINDINGS = [
+        *NavigableModalScreen.BINDINGS,
         Binding("escape", "cancel", "Cancel"),
     ]
 
@@ -751,7 +866,16 @@ class QueuedApp(App):
             local_size = local_path.stat().st_size
 
             # Show modal and wait for user decision
-            result = await self.push_screen_wait(FileExistsModal(f.name, local_size, f.size))
+            result = await self.push_screen_wait(
+                FileExistsModal(
+                    f.name,
+                    local_size,
+                    f.size,
+                    remote_path=f.path,
+                    local_path=str(local_path),
+                    sftp=self.sftp,
+                )
+            )
 
             if result == "continue":
                 # Resume - add to queue, existing partial file will be used

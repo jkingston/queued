@@ -607,3 +607,140 @@ class SpeedTracker:
             self._smoothed_eta = self._alpha * raw_eta + (1 - self._alpha) * self._smoothed_eta
 
         return self._smoothed_eta
+
+
+def _calculate_local_md5(filepath: str) -> str:
+    """Calculate MD5 checksum of a local file."""
+    md5 = hashlib.md5()
+    with open(filepath, "rb") as f:
+        for chunk in iter(lambda: f.read(65536), b""):
+            md5.update(chunk)
+    return md5.hexdigest()
+
+
+async def verify_file(
+    remote_path: str,
+    local_path: str,
+    remote_size: int,
+    sftp: SFTPClient,
+) -> tuple[bool, str]:
+    """
+    Verify a local file against the remote source.
+
+    Verification cascade:
+    1. Look for .sfv/.md5 checksum files in remote directory
+    2. Compute remote MD5 via SSH and compare with local
+    3. Fall back to size comparison only
+
+    Args:
+        remote_path: Path to remote file
+        local_path: Path to local file
+        remote_size: Expected size from remote file info
+        sftp: Connected SFTP client
+
+    Returns:
+        Tuple of (success, message) where:
+        - success: True if verification passed
+        - message: Human-readable result description
+    """
+    local_file = Path(local_path)
+    if not local_file.exists():
+        return False, "Local file not found"
+
+    local_size = local_file.stat().st_size
+    remote_dir = str(PurePosixPath(remote_path).parent)
+    remote_name = PurePosixPath(remote_path).name
+
+    # Step 1: Look for .sfv or .md5 checksum files
+    try:
+        files = await sftp.list_dir(remote_dir)
+        for f in files:
+            if f.name.endswith(".sfv"):
+                result = await _verify_sfv(f"{remote_dir}/{f.name}", remote_name, local_path, sftp)
+                if result is not None:
+                    if result:
+                        return True, "Verified (CRC32 match)"
+                    else:
+                        return False, "CRC32 mismatch"
+            elif f.name.endswith(".md5"):
+                result = await _verify_md5_file(
+                    f"{remote_dir}/{f.name}", remote_name, local_path, sftp
+                )
+                if result is not None:
+                    if result:
+                        return True, "Verified (MD5 match)"
+                    else:
+                        return False, "MD5 mismatch"
+    except SFTPError:
+        pass  # Continue to next verification method
+
+    # Step 2: Try remote MD5 via SSH
+    try:
+        remote_md5 = await sftp.compute_remote_md5(remote_path)
+        if remote_md5:
+            local_md5 = _calculate_local_md5(local_path)
+            if local_md5 == remote_md5:
+                return True, "Verified (MD5 match)"
+            else:
+                return False, f"MD5 mismatch (local: {local_md5[:8]}..., remote: {remote_md5[:8]}...)"
+    except Exception:
+        pass  # Fall back to size comparison
+
+    # Step 3: Fall back to size comparison
+    if local_size == remote_size:
+        return True, "Verified (size match only - no checksum available)"
+    else:
+        return False, f"Size mismatch (local: {local_size}, remote: {remote_size})"
+
+
+async def _verify_sfv(
+    sfv_path: str, filename: str, local_path: str, sftp: SFTPClient
+) -> bool | None:
+    """Check file against SFV (Simple File Verification) file."""
+    import zlib
+
+    try:
+        content = await sftp.read_file(sfv_path)
+        lines = content.decode("utf-8", errors="ignore").splitlines()
+
+        for line in lines:
+            line = line.strip()
+            if line.startswith(";") or not line:
+                continue
+            # SFV format: filename CRC32
+            match = re.match(r"(.+?)\s+([0-9a-fA-F]{8})$", line)
+            if match and match.group(1).lower() == filename.lower():
+                expected_crc = match.group(2).lower()
+                # Calculate local CRC32
+                crc = 0
+                with open(local_path, "rb") as f:
+                    for chunk in iter(lambda: f.read(65536), b""):
+                        crc = zlib.crc32(chunk, crc)
+                actual_crc = format(crc & 0xFFFFFFFF, "08x")
+                return actual_crc == expected_crc
+    except (SFTPError, UnicodeDecodeError, OSError):
+        pass
+    return None
+
+
+async def _verify_md5_file(
+    md5_path: str, filename: str, local_path: str, sftp: SFTPClient
+) -> bool | None:
+    """Check file against MD5 checksum file."""
+    try:
+        content = await sftp.read_file(md5_path)
+        lines = content.decode("utf-8", errors="ignore").splitlines()
+
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            # MD5 format: hash *filename or hash  filename
+            match = re.match(r"([0-9a-fA-F]{32})\s+\*?(.+)$", line)
+            if match and match.group(2).strip().lower() == filename.lower():
+                expected_md5 = match.group(1).lower()
+                actual_md5 = _calculate_local_md5(local_path)
+                return actual_md5 == expected_md5
+    except (SFTPError, UnicodeDecodeError, OSError):
+        pass
+    return None

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import shlex
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
@@ -330,6 +331,31 @@ class SFTPClient:
         # The check-file extension is not widely supported
         # This is a placeholder for when it is available
         return None
+
+    async def compute_remote_md5(self, path: str) -> str | None:
+        """
+        Compute MD5 hash of remote file by running md5sum via SSH.
+
+        Returns the MD5 hash string, or None if:
+        - Not connected
+        - md5sum command not available on remote
+        - Command execution fails
+        """
+        if not self._conn:
+            return None
+
+        try:
+            # Run md5sum command on remote server
+            # Output format: "hash  filename" or "hash *filename"
+            result = await self._conn.run(f"md5sum {shlex.quote(path)}", check=True, timeout=300)
+            # Parse the hash from output (first field)
+            output = result.stdout.strip()
+            if output:
+                return output.split()[0]
+            return None
+        except Exception as e:
+            logger.debug("Failed to compute remote MD5 for %s: %s", path, e)
+            return None
 
     async def read_file(self, path: str, max_size: int = 1024 * 1024) -> bytes:
         """Read a small file (for .sfv, .md5 files)."""

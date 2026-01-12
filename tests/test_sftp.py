@@ -423,3 +423,108 @@ class TestSFTPClientPermissions:
         # rwx------ = 700
         result = client._format_permissions(0o700)
         assert result == "rwx------"
+
+
+class TestRemoteMD5:
+    """Tests for remote MD5 computation via SSH."""
+
+    @pytest.mark.asyncio
+    async def test_compute_remote_md5_success(self):
+        """Should return MD5 hash when command succeeds."""
+        host = Host(hostname="example.com", username="user")
+        client = SFTPClient(host)
+
+        # Mock the SSH connection
+        mock_result = MagicMock()
+        mock_result.stdout = "d41d8cd98f00b204e9800998ecf8427e  /path/to/file.txt\n"
+
+        mock_conn = AsyncMock()
+        mock_conn.run = AsyncMock(return_value=mock_result)
+        client._conn = mock_conn
+
+        result = await client.compute_remote_md5("/path/to/file.txt")
+
+        assert result == "d41d8cd98f00b204e9800998ecf8427e"
+        mock_conn.run.assert_called_once()
+        # Verify shlex quoting is used
+        call_args = mock_conn.run.call_args[0][0]
+        assert "/path/to/file.txt" in call_args
+
+    @pytest.mark.asyncio
+    async def test_compute_remote_md5_binary_mode_output(self):
+        """Should handle binary mode output format (hash *filename)."""
+        host = Host(hostname="example.com", username="user")
+        client = SFTPClient(host)
+
+        mock_result = MagicMock()
+        mock_result.stdout = "abc123def456  *file.bin\n"
+
+        mock_conn = AsyncMock()
+        mock_conn.run = AsyncMock(return_value=mock_result)
+        client._conn = mock_conn
+
+        result = await client.compute_remote_md5("/path/file.bin")
+
+        assert result == "abc123def456"
+
+    @pytest.mark.asyncio
+    async def test_compute_remote_md5_not_connected(self):
+        """Should return None when not connected."""
+        host = Host(hostname="example.com", username="user")
+        client = SFTPClient(host)
+        client._conn = None
+
+        result = await client.compute_remote_md5("/path/to/file.txt")
+
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_compute_remote_md5_command_fails(self):
+        """Should return None when md5sum command fails."""
+        host = Host(hostname="example.com", username="user")
+        client = SFTPClient(host)
+
+        mock_conn = AsyncMock()
+        mock_conn.run = AsyncMock(side_effect=Exception("md5sum: command not found"))
+        client._conn = mock_conn
+
+        result = await client.compute_remote_md5("/path/to/file.txt")
+
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_compute_remote_md5_empty_output(self):
+        """Should return None when command returns empty output."""
+        host = Host(hostname="example.com", username="user")
+        client = SFTPClient(host)
+
+        mock_result = MagicMock()
+        mock_result.stdout = ""
+
+        mock_conn = AsyncMock()
+        mock_conn.run = AsyncMock(return_value=mock_result)
+        client._conn = mock_conn
+
+        result = await client.compute_remote_md5("/path/to/file.txt")
+
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_compute_remote_md5_special_characters_in_path(self):
+        """Should properly escape paths with special characters."""
+        host = Host(hostname="example.com", username="user")
+        client = SFTPClient(host)
+
+        mock_result = MagicMock()
+        mock_result.stdout = "abc123  /path/with spaces/file.txt\n"
+
+        mock_conn = AsyncMock()
+        mock_conn.run = AsyncMock(return_value=mock_result)
+        client._conn = mock_conn
+
+        result = await client.compute_remote_md5("/path/with spaces/file.txt")
+
+        assert result == "abc123"
+        # Verify shlex quoting was applied
+        call_args = mock_conn.run.call_args[0][0]
+        assert "'/path/with spaces/file.txt'" in call_args

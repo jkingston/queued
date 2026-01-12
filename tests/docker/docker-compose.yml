@@ -1,0 +1,19 @@
+version: '3.8'
+services:
+  ssh-server:
+    image: linuxserver/openssh-server
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - USER_NAME=testuser
+      - USER_PASSWORD=testpass
+      - PASSWORD_ACCESS=true
+    ports:
+      - "2222:2222"
+    volumes:
+      - ./test-files:/home/testuser/files:ro
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "2222"]
+      interval: 5s
+      timeout: 5s
+      retries: 5

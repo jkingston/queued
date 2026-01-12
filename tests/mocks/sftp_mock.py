@@ -10,19 +10,36 @@ from queued.models import Host, RemoteFile
 class MockSFTPClient:
     """Mock SFTP client for testing without network connections."""
 
-    def __init__(self, files: Optional[list[RemoteFile]] = None):
+    def __init__(
+        self,
+        files: Optional[list[RemoteFile]] = None,
+        remote_md5_results: Optional[dict[str, str]] = None,
+        md5_available: bool = True,
+        file_contents: Optional[dict[str, bytes]] = None,
+        fail_on_md5: bool = False,
+    ):
         """Initialize with mock file listing.
 
         Args:
             files: List of RemoteFile objects to return from list_dir
+            remote_md5_results: Dict mapping paths to MD5 hashes for compute_remote_md5
+            md5_available: If False, compute_remote_md5 returns None (simulates missing md5sum)
+            file_contents: Dict mapping paths to file contents for read_file
+            fail_on_md5: If True, compute_remote_md5 raises exception (simulates connection drop)
         """
         self._files = files or []
         self._connected = False
         self._current_dir = "/"
+        self._remote_md5_results = remote_md5_results or {}
+        self._md5_available = md5_available
+        self._file_contents = file_contents or {}
+        self._fail_on_md5 = fail_on_md5
         # Track calls for assertions
         self.connect_calls = 0
         self.disconnect_calls = 0
         self.list_dir_calls: list[str] = []
+        self.compute_remote_md5_calls: list[str] = []
+        self.read_file_calls: list[str] = []
 
     @property
     def connected(self) -> bool:
@@ -76,6 +93,22 @@ class MockSFTPClient:
 
     async def file_exists(self, path: str) -> bool:
         return any(f.path == path for f in self._files)
+
+    async def compute_remote_md5(self, path: str) -> Optional[str]:
+        """Return configured MD5 hash or None if md5sum unavailable."""
+        self.compute_remote_md5_calls.append(path)
+        if self._fail_on_md5:
+            raise Exception("Connection lost")
+        if not self._md5_available:
+            return None
+        return self._remote_md5_results.get(path)
+
+    async def read_file(self, path: str, max_size: int = 1024 * 1024) -> bytes:
+        """Return configured file contents."""
+        self.read_file_calls.append(path)
+        if path in self._file_contents:
+            return self._file_contents[path]
+        raise Exception(f"File not found: {path}")
 
 
 def create_mock_files() -> list[RemoteFile]:

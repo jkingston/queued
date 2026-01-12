@@ -1,9 +1,10 @@
 """Tests for transfer manager."""
 
+import hashlib
 import tempfile
 import time
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -16,7 +17,7 @@ from queued.models import (
     TransferDirection,
     TransferStatus,
 )
-from queued.transfer import SpeedTracker, TransferManager
+from queued.transfer import SpeedTracker, TransferManager, verify_file
 
 
 class TestTransferManagerQueue:
@@ -646,3 +647,179 @@ class TestTransferManagerMaxConcurrent:
                 manager.queue.transfers.extend([t1, t2])
 
                 assert manager.queue.can_start_more is False
+
+
+class TestFileVerification:
+    """Tests for verify_file function."""
+
+    @pytest.mark.asyncio
+    async def test_verify_file_not_found(self):
+        """Should return failure when local file doesn't exist."""
+        mock_sftp = AsyncMock()
+
+        success, message = await verify_file(
+            "/remote/file.txt", "/nonexistent/file.txt", 1000, mock_sftp
+        )
+
+        assert success is False
+        assert "not found" in message.lower()
+
+    @pytest.mark.asyncio
+    async def test_verify_with_remote_md5_match(self):
+        """Should verify successfully when remote MD5 matches local."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Create a local file with known content
+            local_path = Path(tmpdir) / "file.txt"
+            content = b"test content for md5"
+            local_path.write_bytes(content)
+            expected_md5 = hashlib.md5(content).hexdigest()
+
+            # Mock SFTP client
+            mock_sftp = AsyncMock()
+            mock_sftp.list_dir = AsyncMock(return_value=[])  # No checksum files
+            mock_sftp.compute_remote_md5 = AsyncMock(return_value=expected_md5)
+
+            success, message = await verify_file(
+                "/remote/file.txt",
+                str(local_path),
+                len(content),
+                mock_sftp,
+            )
+
+            assert success is True
+            assert "MD5 match" in message
+
+    @pytest.mark.asyncio
+    async def test_verify_with_remote_md5_mismatch(self):
+        """Should fail when remote MD5 doesn't match local."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Create a local file
+            local_path = Path(tmpdir) / "file.txt"
+            local_path.write_bytes(b"local content")
+
+            # Mock SFTP client with different MD5
+            mock_sftp = AsyncMock()
+            mock_sftp.list_dir = AsyncMock(return_value=[])
+            mock_sftp.compute_remote_md5 = AsyncMock(return_value="different_hash_12345")
+
+            success, message = await verify_file(
+                "/remote/file.txt", str(local_path), 100, mock_sftp
+            )
+
+            assert success is False
+            assert "mismatch" in message.lower()
+
+    @pytest.mark.asyncio
+    async def test_verify_fallback_to_size_match(self):
+        """Should fall back to size comparison when MD5 unavailable."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Create a local file
+            local_path = Path(tmpdir) / "file.txt"
+            content = b"test content"
+            local_path.write_bytes(content)
+
+            # Mock SFTP - no checksum files, no MD5 available
+            mock_sftp = AsyncMock()
+            mock_sftp.list_dir = AsyncMock(return_value=[])
+            mock_sftp.compute_remote_md5 = AsyncMock(return_value=None)
+
+            success, message = await verify_file(
+                "/remote/file.txt", str(local_path), len(content), mock_sftp
+            )
+
+            assert success is True
+            assert "size match only" in message.lower()
+
+    @pytest.mark.asyncio
+    async def test_verify_size_mismatch(self):
+        """Should fail when sizes don't match and no checksum available."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            local_path = Path(tmpdir) / "file.txt"
+            local_path.write_bytes(b"short")
+
+            mock_sftp = AsyncMock()
+            mock_sftp.list_dir = AsyncMock(return_value=[])
+            mock_sftp.compute_remote_md5 = AsyncMock(return_value=None)
+
+            success, message = await verify_file(
+                "/remote/file.txt",
+                str(local_path),
+                1000,
+                mock_sftp,  # Remote is larger
+            )
+
+            assert success is False
+            assert "size mismatch" in message.lower()
+
+    @pytest.mark.asyncio
+    async def test_verify_with_md5_checksum_file(self):
+        """Should use .md5 checksum file when available."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # Create local file
+            local_path = Path(tmpdir) / "file.txt"
+            content = b"test content for checksum"
+            local_path.write_bytes(content)
+            expected_md5 = hashlib.md5(content).hexdigest()
+
+            # Mock .md5 file in remote directory
+            md5_file = MagicMock()
+            md5_file.name = "checksums.md5"
+
+            mock_sftp = AsyncMock()
+            mock_sftp.list_dir = AsyncMock(return_value=[md5_file])
+            mock_sftp.read_file = AsyncMock(return_value=f"{expected_md5}  file.txt\n".encode())
+
+            success, message = await verify_file(
+                "/remote/file.txt", str(local_path), len(content), mock_sftp
+            )
+
+            assert success is True
+            assert "MD5 match" in message
+
+    @pytest.mark.asyncio
+    async def test_verify_with_md5_file_mismatch(self):
+        """Should fail when .md5 file checksum doesn't match."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            local_path = Path(tmpdir) / "file.txt"
+            local_path.write_bytes(b"local content")
+
+            md5_file = MagicMock()
+            md5_file.name = "checksums.md5"
+
+            mock_sftp = AsyncMock()
+            mock_sftp.list_dir = AsyncMock(return_value=[md5_file])
+            mock_sftp.read_file = AsyncMock(
+                return_value=b"differenthash12345678901234567890  file.txt\n"
+            )
+
+            success, message = await verify_file(
+                "/remote/file.txt", str(local_path), 100, mock_sftp
+            )
+
+            assert success is False
+            assert "mismatch" in message.lower()
+
+    @pytest.mark.asyncio
+    async def test_verify_with_sfv_checksum_file(self):
+        """Should use .sfv checksum file when available."""
+        import zlib
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            local_path = Path(tmpdir) / "file.txt"
+            content = b"test content for sfv"
+            local_path.write_bytes(content)
+            expected_crc = format(zlib.crc32(content) & 0xFFFFFFFF, "08x")
+
+            sfv_file = MagicMock()
+            sfv_file.name = "checksums.sfv"
+
+            mock_sftp = AsyncMock()
+            mock_sftp.list_dir = AsyncMock(return_value=[sfv_file])
+            mock_sftp.read_file = AsyncMock(return_value=f"file.txt {expected_crc}\n".encode())
+
+            success, message = await verify_file(
+                "/remote/file.txt", str(local_path), len(content), mock_sftp
+            )
+
+            assert success is True
+            assert "CRC32 match" in message
