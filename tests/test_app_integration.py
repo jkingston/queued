@@ -164,9 +164,7 @@ class TestFileExistsModalVerify:
             expected_md5 = hashlib.md5(content).hexdigest()
 
             # Mock SFTP with matching MD5
-            mock_sftp = MockSFTPClient(
-                remote_md5_results={"/remote/file.txt": expected_md5}
-            )
+            mock_sftp = MockSFTPClient(remote_md5_results={"/remote/file.txt": expected_md5})
 
             modal = FileExistsModal(
                 "file.txt",
@@ -312,9 +310,7 @@ class TestVerifyE2E:
             expected_md5 = hashlib.md5(content).hexdigest()
 
             # Mock SFTP with matching remote MD5
-            mock_sftp = MockSFTPClient(
-                remote_md5_results={"/remote/testfile.txt": expected_md5}
-            )
+            mock_sftp = MockSFTPClient(remote_md5_results={"/remote/testfile.txt": expected_md5})
 
             # Create modal as if user selected a file that already exists locally
             modal = FileExistsModal(

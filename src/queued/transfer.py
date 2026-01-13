@@ -682,7 +682,7 @@ async def verify_file(
             if local_md5 == remote_md5:
                 return True, "Verified (MD5 match)"
             else:
-                return False, f"MD5 mismatch (local: {local_md5[:8]}..., remote: {remote_md5[:8]}...)"
+                return False, f"MD5 mismatch (local: {local_md5[:8]}, remote: {remote_md5[:8]})"
     except Exception:
         pass  # Fall back to size comparison
 
