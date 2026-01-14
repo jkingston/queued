@@ -26,6 +26,20 @@ class SFTPError(Exception):
     pass
 
 
+def is_connection_error(error: Exception) -> bool:
+    """Check if an exception indicates a dropped connection."""
+    if isinstance(error, (ConnectionResetError, ConnectionAbortedError, BrokenPipeError)):
+        return True
+    if isinstance(error, OSError) and error.errno in (54, 32, 104):  # Connection reset codes
+        return True
+    if isinstance(error, asyncssh.Error):
+        # Check for connection-related asyncssh errors
+        error_str = str(error).lower()
+        if any(x in error_str for x in ("connection", "disconnect", "closed")):
+            return True
+    return False
+
+
 # Chunk size for manual reads (resume case) - increased from 32KB for better throughput
 CHUNK_SIZE = 262144  # 256KB
 

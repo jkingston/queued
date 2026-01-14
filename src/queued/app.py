@@ -171,6 +171,69 @@ class ErrorModal(NavigableModalScreen[None]):
         self.dismiss(None)
 
 
+class ReconnectModal(NavigableModalScreen[str]):
+    """Modal shown when auto-reconnection fails."""
+
+    BINDINGS = [
+        *NavigableModalScreen.BINDINGS,
+        Binding("escape", "quit_app", "Quit"),
+    ]
+
+    DEFAULT_CSS = """
+    ReconnectModal {
+        align: center middle;
+    }
+
+    ReconnectModal > Container {
+        width: 50;
+        height: auto;
+        background: $surface;
+        border: thick $warning;
+        padding: 1 2;
+    }
+
+    ReconnectModal .modal-title {
+        text-align: center;
+        text-style: bold;
+        color: $warning;
+        margin-bottom: 1;
+    }
+
+    ReconnectModal .modal-message {
+        text-align: center;
+        margin-bottom: 1;
+    }
+
+    ReconnectModal Horizontal {
+        align: center middle;
+        height: auto;
+    }
+
+    ReconnectModal Button {
+        margin: 0 1;
+    }
+    """
+
+    def __init__(self, host: Host | None = None) -> None:
+        super().__init__()
+        self.host = host
+
+    def compose(self) -> ComposeResult:
+        hostname = self.host.hostname if self.host else "server"
+        with Container():
+            yield Label("Connection Lost", classes="modal-title")
+            yield Label(f"Could not reconnect to {hostname}", classes="modal-message")
+            with Horizontal():
+                yield Button("Retry", id="retry", variant="primary")
+                yield Button("Quit", id="quit", variant="error")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        self.dismiss(event.button.id)
+
+    def action_quit_app(self) -> None:
+        self.dismiss("quit")
+
+
 class FileExistsModal(NavigableModalScreen[Optional[str]]):
     """Modal for handling file conflicts during download."""
 
@@ -789,6 +852,71 @@ class QueuedApp(App):
         if self._current_host:
             self._current_host.last_directory = event.path
             self.host_cache.add(self._current_host)
+
+    @work(exclusive=True)
+    async def on_file_browser_connection_lost(self, event: FileBrowser.ConnectionLost) -> None:
+        """Handle connection lost - try auto-reconnect first."""
+        status_bar = self.query_one("#status-bar", StatusBar)
+        status_bar.set_connection("Reconnecting...", False)
+
+        # Try automatic reconnection
+        if await self._try_reconnect():
+            return  # Success - already reloaded directory
+
+        # Auto-reconnect failed - show modal
+        status_bar.set_connection("Disconnected", False)
+        result = await self.push_screen(
+            ReconnectModal(self.sftp.host if self.sftp else None),
+            wait_for_dismiss=True,
+        )
+
+        if result == "retry":
+            # Try again
+            status_bar.set_connection("Reconnecting...", False)
+            if await self._try_reconnect():
+                return
+            # Still failed - show error
+            await self.push_screen(
+                ErrorModal("Could not reconnect to server"),
+                wait_for_dismiss=True,
+            )
+            status_bar.set_connection("Disconnected", False)
+        elif result == "quit":
+            self.exit()
+
+    async def _try_reconnect(self) -> bool:
+        """Attempt to reconnect. Returns True on success, False on failure."""
+        if not self.sftp:
+            return False
+
+        host = self.sftp.host
+        status_bar = self.query_one("#status-bar", StatusBar)
+
+        try:
+            # Disconnect old connection (ignore errors)
+            try:
+                await self.sftp.disconnect()
+            except Exception:
+                pass
+
+            # Create new connection
+            self.sftp = SFTPClient(host)
+            await self.sftp.connect()
+
+            # Update pool
+            self.connection_pool.add_connection(host.host_key, self.sftp)
+
+            # Update UI
+            status_bar.set_connection(str(host), True)
+            file_browser = self.query_one("#file-browser", FileBrowser)
+            file_browser.sftp = self.sftp
+
+            # Reload current directory
+            file_browser.load_directory(file_browser.current_path)
+            return True
+
+        except Exception:
+            return False
 
     @work(exclusive=True)
     async def _queue_downloads(self, files: list[RemoteFile]) -> None:

@@ -10,7 +10,7 @@ from textual.message import Message
 from textual.widgets import DataTable, Label, Static
 
 from queued.models import RemoteFile, TransferQueue, TransferStatus
-from queued.sftp import SFTPClient, SFTPError
+from queued.sftp import SFTPClient, SFTPError, is_connection_error
 
 
 class FileBrowser(Static):
@@ -82,6 +82,11 @@ class FileBrowser(Static):
             super().__init__()
             self.files = files
 
+    class ConnectionLost(Message):
+        """Connection to server was lost."""
+
+        pass
+
     def __init__(
         self,
         sftp_client: SFTPClient | None = None,
@@ -119,6 +124,7 @@ class FileBrowser(Static):
     async def load_directory(self, path: str) -> None:
         """Load directory contents."""
         if not self.sftp or not self.sftp.connected:
+            self.post_message(self.ConnectionLost())
             return
 
         self._loading = True
@@ -139,6 +145,11 @@ class FileBrowser(Static):
             self.post_message(self.DirectoryChanged(path))
         except SFTPError as e:
             self._update_status(f"Error: {e}")
+        except Exception as e:
+            if is_connection_error(e):
+                self.post_message(self.ConnectionLost())
+            else:
+                self._update_status(f"Error: {e}")
         finally:
             self._loading = False
 
