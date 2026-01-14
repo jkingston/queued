@@ -105,10 +105,6 @@ class HelpScreen(ModalScreen):
             yield Label("↑↓/jk     Navigate transfers", classes="help-item")
             yield Label("⇧↑↓/JK    Reorder in queue", classes="help-item")
 
-            yield Label("Bandwidth", classes="help-section")
-            yield Label("t         Toggle speed limit on/off", classes="help-item")
-            yield Label("T         Cycle through presets", classes="help-item")
-
             yield Label("General", classes="help-section")
             yield Label("Tab       Switch pane focus", classes="help-item")
             yield Label("?/F1      Show this help", classes="help-item")

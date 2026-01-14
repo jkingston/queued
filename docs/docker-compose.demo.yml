@@ -6,4 +6,5 @@ services:
     volumes:
       - ./demo-files:/home/demo/files:ro
       - ./ssh-host-keys:/etc/ssh/keys:ro
-    command: demo:demo:1001
+      - ./ssh-user-keys/demo_key.pub:/home/demo/.ssh/keys/demo_key.pub:ro
+    command: demo::1001

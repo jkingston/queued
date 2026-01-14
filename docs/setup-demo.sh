@@ -11,6 +11,10 @@ mkdir -p ssh-host-keys
 [ -f ssh-host-keys/ssh_host_ed25519_key ] || ssh-keygen -t ed25519 -f ssh-host-keys/ssh_host_ed25519_key -N ""
 [ -f ssh-host-keys/ssh_host_rsa_key ] || ssh-keygen -t rsa -f ssh-host-keys/ssh_host_rsa_key -N ""
 
+echo "Generating demo user SSH key..."
+mkdir -p ssh-user-keys
+[ -f ssh-user-keys/demo_key ] || ssh-keygen -t ed25519 -f ssh-user-keys/demo_key -N "" -C "demo@localhost"
+
 echo "Generating demo files..."
 mkdir -p demo-files/{movies,music,docs}
 [ -f demo-files/movies/movie1.mkv ] || dd if=/dev/urandom of=demo-files/movies/movie1.mkv bs=1M count=10 2>/dev/null

@@ -17,12 +17,28 @@ Set Theme "Catppuccin Mocha"
 Set TypingSpeed 80ms
 Set Padding 20
 
+# Add host key to known_hosts (hidden from GIF)
+Hide
+Type "ssh-keyscan -p 2222 localhost >> ~/.ssh/known_hosts 2>/dev/null"
+Enter
+Sleep 1s
+Type "clear"
+Enter
+Sleep 500ms
+Show
+
 # Launch queued (server must already be running)
-Type "uv run queued demo@localhost -p 2222"
+Type "uv run queued demo@localhost -p 2222 -i docs/ssh-user-keys/demo_key"
 Enter
 Sleep 4s
 
-# Navigate to movies directory
+# Navigate to files directory
+Type "j"
+Sleep 300ms
+Type "l"
+Sleep 1s
+
+# Navigate into movies directory
 Type "j"
 Sleep 300ms
 Type "j"
@@ -30,7 +46,7 @@ Sleep 300ms
 Type "l"
 Sleep 1s
 
-# Select all files
+# Select all movie files
 Type "a"
 Sleep 500ms
 

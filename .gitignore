@@ -52,4 +52,5 @@ result-*
 
 # Generated demo assets
 docs/ssh-host-keys/
+docs/ssh-user-keys/
 docs/demo-files/
