@@ -722,7 +722,7 @@ class QueuedApp(App):
         status_bar.set_download_dir(self.settings_manager.settings.download_dir)
 
         if self.initial_host:
-            await self._connect(self.initial_host)
+            self._connect(self.initial_host)
         else:
             # Show connection dialog
             self.call_after_refresh(self._show_connection_dialog)

@@ -645,3 +645,38 @@ class TestVerifyChecksumFiles:
                 result_label = app.modal.query_one("#verify-result")
                 result_text = str(result_label.content)
                 assert "MD5 match" in result_text or "match" in result_text.lower()
+
+
+class TestQueuedAppInitialHost:
+    """Tests for QueuedApp with initial_host parameter (CLI connection path)."""
+
+    @pytest.mark.asyncio
+    async def test_initial_host_does_not_crash_on_mount(self):
+        """App with initial_host should not crash during on_mount.
+
+        Regression test for bug where `await self._connect()` was incorrectly
+        awaiting a @work decorated method (workers cannot be awaited).
+        """
+        from unittest.mock import AsyncMock, patch
+
+        from queued.app import QueuedApp
+        from queued.models import Host
+
+        mock_host = Host(hostname="test.example.com", username="testuser", port=22)
+
+        # Patch SFTPClient to prevent real network calls
+        with patch("queued.app.SFTPClient") as mock_sftp_class:
+            mock_sftp = AsyncMock()
+            mock_sftp.connected = True
+            mock_sftp.list_dir = AsyncMock(return_value=[])
+            mock_sftp.get_pwd = AsyncMock(return_value="/")
+            mock_sftp_class.return_value = mock_sftp
+
+            app = QueuedApp(host=mock_host)
+
+            # This should not raise "object worker cannot be used in await expression"
+            async with app.run_test() as pilot:
+                await pilot.pause()
+
+                # App should have mounted successfully
+                assert app.is_running
