@@ -1,0 +1,9 @@
+services:
+  sftp:
+    image: atmoz/sftp
+    ports:
+      - "2222:22"
+    volumes:
+      - ./demo-files:/home/demo/files:ro
+      - ./ssh-host-keys:/etc/ssh/keys:ro
+    command: demo:demo:1001

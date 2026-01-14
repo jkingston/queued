@@ -13,9 +13,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Concurrent downloads with configurable limits (1-5)
 - Resume support for interrupted transfers
 - Checksum verification using .sfv and .md5 files
-- Bandwidth limiting
 - Recent hosts cache for quick reconnection
 - Queue persistence across app restarts
 - Individual transfer pause/resume
 - Queue stop/resume with proper state management
 - Directory queue indicators in file browser
+- Auto-reconnect on connection loss
+- SFTP download optimizations (pipelining, optimized ciphers)
+- Vim-style page navigation (Ctrl+f/b)

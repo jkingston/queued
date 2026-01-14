@@ -4,6 +4,8 @@
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
+![Queued Demo](docs/demo.gif)
+
 A TUI SFTP download manager. Browse remote files, queue downloads, and watch transfer progress - all from your terminal.
 
 ## Features
@@ -12,8 +14,9 @@ A TUI SFTP download manager. Browse remote files, queue downloads, and watch tra
 - **Download queue** - Queue multiple files with configurable concurrent transfers (1-5)
 - **Resume support** - Interrupted downloads resume from where they left off
 - **Integrity verification** - Automatic verification using `.sfv` or `.md5` files
-- **Bandwidth limiting** - Cap download speed when needed
+- **Auto-reconnect** - Automatically reconnects if connection is lost
 - **Recent hosts** - Quickly reconnect to previously used servers
+- **Session persistence** - Queue state preserved across app restarts
 
 ## Installation
 
@@ -73,6 +76,8 @@ queued
 | `Escape` | Clear selection |
 | `r` | Refresh directory listing |
 | `d` | Download cursor/selected (recursive for dirs) |
+| `Ctrl+f` | Page down |
+| `Ctrl+b` | Page up |
 
 ### Transfers
 | Key | Action |
@@ -99,7 +104,6 @@ Settings are stored in `~/.config/queued/settings.json`:
 ```json
 {
   "max_concurrent_transfers": 3,
-  "bandwidth_limit": null,
   "download_dir": "~/Downloads",
   "auto_refresh_interval": 30,
   "verify_checksums": true,
@@ -135,6 +139,27 @@ cd queued
 uv sync
 uv run pytest
 uv run ruff check src/
+```
+
+### Recording Demo GIF
+
+Requires: [VHS](https://github.com/charmbracelet/vhs), Docker
+
+```bash
+# Setup demo environment (one-time)
+./docs/setup-demo.sh
+
+# Start demo server
+docker compose -f docs/docker-compose.demo.yml up -d
+
+# Add host key (first time only)
+ssh-keyscan -p 2222 localhost >> ~/.ssh/known_hosts
+
+# Record GIF
+vhs docs/demo.tape
+
+# Stop demo server
+docker compose -f docs/docker-compose.demo.yml down
 ```
 
 ## License

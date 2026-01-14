@@ -49,3 +49,7 @@ result-*
 
 # Project specific
 .claude/
+
+# Generated demo assets
+docs/ssh-host-keys/
+docs/demo-files/
