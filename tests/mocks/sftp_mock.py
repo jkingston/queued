@@ -17,6 +17,7 @@ class MockSFTPClient:
         md5_available: bool = True,
         file_contents: Optional[dict[str, bytes]] = None,
         fail_on_md5: bool = False,
+        fail_on_list_dir: bool = False,
     ):
         """Initialize with mock file listing.
 
@@ -26,6 +27,7 @@ class MockSFTPClient:
             md5_available: If False, compute_remote_md5 returns None (simulates missing md5sum)
             file_contents: Dict mapping paths to file contents for read_file
             fail_on_md5: If True, compute_remote_md5 raises exception (simulates connection drop)
+            fail_on_list_dir: If True, list_dir raises ConnectionResetError
         """
         self._files = files or []
         self._connected = False
@@ -34,6 +36,7 @@ class MockSFTPClient:
         self._md5_available = md5_available
         self._file_contents = file_contents or {}
         self._fail_on_md5 = fail_on_md5
+        self._fail_on_list_dir = fail_on_list_dir
         # Track calls for assertions
         self.connect_calls = 0
         self.disconnect_calls = 0
@@ -55,6 +58,8 @@ class MockSFTPClient:
 
     async def list_dir(self, path: str = ".") -> list[RemoteFile]:
         self.list_dir_calls.append(path)
+        if self._fail_on_list_dir:
+            raise ConnectionResetError(54, "Connection reset by peer")
         # Filter files by parent path
         if path == "/" or path == ".":
             return [f for f in self._files if "/" not in f.path.lstrip("/")]

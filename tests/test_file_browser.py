@@ -365,3 +365,53 @@ class TestFileBrowserNavigation:
             parent = "/"
 
         assert parent == "/"
+
+
+class TestFileBrowserConnectionLost:
+    """Test connection drop handling."""
+
+    @pytest.mark.asyncio
+    async def test_connection_error_posts_connection_lost_message(self):
+        """When list_dir fails with connection error, ConnectionLost is posted."""
+        mock_sftp = MockSFTPClient(files=[], fail_on_list_dir=True)
+        mock_sftp._connected = True
+
+        messages: list[FileBrowser.ConnectionLost] = []
+
+        class ConnectionLostTestApp(App):
+            def compose(self) -> ComposeResult:
+                yield FileBrowser(sftp_client=mock_sftp, id="browser")
+
+            def on_file_browser_connection_lost(self, event: FileBrowser.ConnectionLost) -> None:
+                messages.append(event)
+
+        async with ConnectionLostTestApp().run_test() as pilot:
+            browser = pilot.app.query_one("#browser", FileBrowser)
+            browser.load_directory("/test")
+            await pilot.pause()
+
+            assert len(messages) == 1
+            assert isinstance(messages[0], FileBrowser.ConnectionLost)
+
+    @pytest.mark.asyncio
+    async def test_disconnected_sftp_posts_connection_lost_message(self):
+        """When SFTP is disconnected, ConnectionLost is posted."""
+        mock_sftp = MockSFTPClient(files=[])
+        mock_sftp._connected = False  # Simulates disconnected state
+
+        messages: list[FileBrowser.ConnectionLost] = []
+
+        class ConnectionLostTestApp(App):
+            def compose(self) -> ComposeResult:
+                yield FileBrowser(sftp_client=mock_sftp, id="browser")
+
+            def on_file_browser_connection_lost(self, event: FileBrowser.ConnectionLost) -> None:
+                messages.append(event)
+
+        async with ConnectionLostTestApp().run_test() as pilot:
+            browser = pilot.app.query_one("#browser", FileBrowser)
+            browser.load_directory("/test")
+            await pilot.pause()
+
+            assert len(messages) == 1
+            assert isinstance(messages[0], FileBrowser.ConnectionLost)
