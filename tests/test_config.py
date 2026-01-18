@@ -18,7 +18,7 @@ class TestSettingsManager:
                 manager = SettingsManager()
                 settings = manager.settings
 
-                assert settings.max_concurrent_transfers == 3
+                assert settings.max_concurrent_transfers == 10
                 assert settings.bandwidth_limit is None
                 assert settings.download_dir == "~/Downloads"
                 assert settings.auto_refresh_interval == 30

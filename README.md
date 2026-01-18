@@ -11,7 +11,7 @@ A TUI SFTP download manager. Browse remote files, queue downloads, and watch tra
 ## Features
 
 - **Dual-pane interface** - Browse remote files on the left, manage transfers on the right
-- **Download queue** - Queue multiple files with configurable concurrent transfers (1-5)
+- **Download queue** - Queue multiple files with configurable concurrent transfers (1-50)
 - **Resume support** - Interrupted downloads resume from where they left off
 - **Integrity verification** - Automatic verification using `.sfv` or `.md5` files
 - **Auto-reconnect** - Automatically reconnects if connection is lost
@@ -95,6 +95,7 @@ queued
 |-----|--------|
 | `Tab` | Switch between panes |
 | `?` / `F1` | Show help |
+| `s` | Settings |
 | `q` | Quit |
 
 ## Configuration
@@ -103,7 +104,7 @@ Settings are stored in `~/.config/queued/settings.json`:
 
 ```json
 {
-  "max_concurrent_transfers": 3,
+  "max_concurrent_transfers": 10,
   "download_dir": "~/Downloads",
   "auto_refresh_interval": 30,
   "verify_checksums": true,

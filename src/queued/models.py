@@ -243,7 +243,7 @@ class TransferQueue:
     """Queue of transfers with state management."""
 
     transfers: list[Transfer] = field(default_factory=list)
-    max_concurrent: int = 3
+    max_concurrent: int = 10
 
     @property
     def active_count(self) -> int:
@@ -345,7 +345,7 @@ class TransferQueue:
 class AppSettings:
     """Application settings."""
 
-    max_concurrent_transfers: int = 3
+    max_concurrent_transfers: int = 10
     bandwidth_limit: int | None = None  # bytes per second, None = unlimited
     download_dir: str = "~/Downloads"
     auto_refresh_interval: int = 30  # seconds, 0 = disabled
@@ -367,7 +367,7 @@ class AppSettings:
     def from_dict(cls, data: dict) -> "AppSettings":
         """Create from dictionary."""
         return cls(
-            max_concurrent_transfers=data.get("max_concurrent_transfers", 3),
+            max_concurrent_transfers=data.get("max_concurrent_transfers", 10),
             bandwidth_limit=data.get("bandwidth_limit"),
             download_dir=data.get("download_dir", "~/Downloads"),
             auto_refresh_interval=data.get("auto_refresh_interval", 30),

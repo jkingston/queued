@@ -484,6 +484,107 @@ class DownloadDirModal(NavigableModalScreen[Optional[str]]):
         self.dismiss(None)
 
 
+class SettingsModal(NavigableModalScreen[Optional[int]]):
+    """Modal for configuring application settings."""
+
+    BINDINGS = [
+        *NavigableModalScreen.BINDINGS,
+        Binding("escape", "cancel", "Cancel"),
+    ]
+
+    DEFAULT_CSS = """
+    SettingsModal {
+        align: center middle;
+    }
+
+    SettingsModal > Container {
+        width: 70;
+        height: auto;
+        background: $surface;
+        border: thick $primary;
+        padding: 1 2;
+    }
+
+    SettingsModal .setting-row {
+        height: auto;
+        margin: 1 0;
+    }
+
+    SettingsModal Label.setting-label {
+        width: 35;
+        content-align: left middle;
+    }
+
+    SettingsModal Input {
+        width: 10;
+    }
+
+    SettingsModal .modal-title {
+        text-align: center;
+        text-style: bold;
+        color: $accent;
+        margin-bottom: 1;
+    }
+
+    SettingsModal .button-row {
+        margin-top: 1;
+        align: center middle;
+        height: auto;
+    }
+    """
+
+    def __init__(
+        self,
+        current_max_concurrent: int,
+        current_download_dir: str,
+    ) -> None:
+        super().__init__()
+        self.current_max_concurrent = current_max_concurrent
+        self.current_download_dir = current_download_dir
+
+    def compose(self) -> ComposeResult:
+        with Container():
+            yield Label("Settings", classes="modal-title")
+
+            # Max concurrent transfers setting
+            with Horizontal(classes="setting-row"):
+                yield Label("Max Concurrent Transfers:", classes="setting-label")
+                yield Input(
+                    value=str(self.current_max_concurrent),
+                    id="max-concurrent-input",
+                    type="integer",
+                )
+
+            # Download directory setting (read-only display)
+            with Horizontal(classes="setting-row"):
+                yield Label("Download Directory:", classes="setting-label")
+                yield Label(self.current_download_dir, id="download-dir-display")
+
+            # Buttons
+            with Horizontal(classes="button-row"):
+                yield Button("Save", variant="primary", id="save-btn")
+                yield Button("Cancel", id="cancel-btn")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "save-btn":
+            max_concurrent_input = self.query_one("#max-concurrent-input", Input)
+            try:
+                value = int(max_concurrent_input.value.strip())
+                if value < 1 or value > 50:
+                    # Show error for out of range
+                    max_concurrent_input.value = str(self.current_max_concurrent)
+                    return
+                self.dismiss(value)
+            except ValueError:
+                # Invalid input, reset to current
+                max_concurrent_input.value = str(self.current_max_concurrent)
+        else:
+            self.dismiss(None)
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
 class ConnectionScreen(ModalScreen[Optional[Host]]):
     """Connection dialog for entering host details."""
 
@@ -682,6 +783,7 @@ class QueuedApp(App):
         Binding("q", "quit", "Quit", show=True),
         Binding("?", "help", "Help", show=True),
         Binding("f1", "help", "Help", show=False),
+        Binding("s", "settings", "Settings", show=True),
         Binding("tab", "focus_next", "Switch Pane", show=True),
         Binding("shift+tab", "focus_previous", "Switch Pane", show=False),
     ]
@@ -1083,6 +1185,16 @@ class QueuedApp(App):
         """Show help screen."""
         self.push_screen(HelpScreen())
 
+    def action_settings(self) -> None:
+        """Show settings screen."""
+        self.push_screen(
+            SettingsModal(
+                current_max_concurrent=self.settings_manager.settings.max_concurrent_transfers,
+                current_download_dir=self.settings_manager.settings.download_dir,
+            ),
+            self._on_settings_result,
+        )
+
     def on_file_browser_download_requested(self, event: FileBrowser.DownloadRequested) -> None:
         """Handle download request from file browser."""
         self._queue_downloads(event.files)
@@ -1107,6 +1219,22 @@ class QueuedApp(App):
             status_bar = self.query_one("#status-bar", StatusBar)
             status_bar.set_download_dir(path)
             status_bar.show_message(f"Download dir: {path}")
+
+    def _on_settings_result(self, max_concurrent: int | None) -> None:
+        """Handle settings modal result."""
+        if max_concurrent is not None:
+            # Update settings
+            self.settings_manager.update(max_concurrent_transfers=max_concurrent)
+
+            # Update the queue's max_concurrent
+            if self.transfer_manager:
+                self.transfer_manager.queue.max_concurrent = max_concurrent
+
+            # Show confirmation in status bar
+            status_bar = self.query_one("#status-bar", StatusBar)
+            status_bar.show_message(
+                f"Settings saved: max concurrent transfers = {max_concurrent}"
+            )
 
     async def action_quit(self) -> None:
         """Quit the application - stop active transfers (they resume on restart)."""
