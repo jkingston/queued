@@ -4,7 +4,13 @@ import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
-from queued.config import HostCache, QueueCache, SettingsManager, TransferStateCache
+from queued.config import (
+    DownloadDirCache,
+    HostCache,
+    QueueCache,
+    SettingsManager,
+    TransferStateCache,
+)
 from queued.models import Host, Transfer, TransferDirection, TransferStatus
 
 
@@ -435,3 +441,95 @@ class TestTransferStateCache:
 
                 offset = cache.get_resume_offset("/file.txt", str(local_path))
                 assert offset == 0
+
+
+class TestDownloadDirCache:
+    """Tests for DownloadDirCache."""
+
+    def test_download_dir_cache_add_and_get(self):
+        """Adding a directory should make it retrievable."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch("queued.config.get_cache_dir", return_value=Path(tmpdir)):
+                cache = DownloadDirCache()
+
+                cache.add("~/Downloads")
+                cache.add("/tmp/downloads")
+
+                recent = cache.get_recent(5)
+                assert len(recent) == 2
+                assert recent[0] == "/tmp/downloads"  # Most recent first
+                assert recent[1] == "~/Downloads"
+
+    def test_download_dir_cache_limit(self):
+        """Cache should respect max_dirs limit."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch("queued.config.get_cache_dir", return_value=Path(tmpdir)):
+                cache = DownloadDirCache(max_dirs=3)
+
+                for i in range(5):
+                    cache.add(f"/dir{i}")
+
+                recent = cache.get_recent(10)
+                assert len(recent) == 3
+
+                # Most recent should be dir4
+                assert recent[0] == "/dir4"
+                assert recent[1] == "/dir3"
+                assert recent[2] == "/dir2"
+
+    def test_download_dir_cache_deduplication(self):
+        """Adding same directory should update position, not duplicate."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch("queued.config.get_cache_dir", return_value=Path(tmpdir)):
+                cache = DownloadDirCache()
+
+                cache.add("~/Downloads")
+                cache.add("/tmp/downloads")
+                cache.add("~/Documents")
+                cache.add("~/Downloads")  # Add again
+
+                recent = cache.get_recent(10)
+                assert len(recent) == 3
+                assert recent[0] == "~/Downloads"  # Moved to front
+                assert recent[1] == "~/Documents"
+                assert recent[2] == "/tmp/downloads"
+
+    def test_download_dir_cache_persistence(self):
+        """Cache should persist across instances."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch("queued.config.get_cache_dir", return_value=Path(tmpdir)):
+                cache1 = DownloadDirCache()
+                cache1.add("~/Downloads")
+                cache1.add("/tmp/downloads")
+
+                # New instance should load from disk
+                cache2 = DownloadDirCache()
+                recent = cache2.get_recent(10)
+
+                assert len(recent) == 2
+                assert recent[0] == "/tmp/downloads"
+                assert recent[1] == "~/Downloads"
+
+    def test_download_dir_cache_get_recent_with_limit(self):
+        """get_recent should respect limit parameter."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch("queued.config.get_cache_dir", return_value=Path(tmpdir)):
+                cache = DownloadDirCache()
+
+                for i in range(5):
+                    cache.add(f"/dir{i}")
+
+                recent = cache.get_recent(3)
+                assert len(recent) == 3
+                assert recent[0] == "/dir4"
+                assert recent[1] == "/dir3"
+                assert recent[2] == "/dir2"
+
+    def test_download_dir_cache_empty(self):
+        """Empty cache should return empty list."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch("queued.config.get_cache_dir", return_value=Path(tmpdir)):
+                cache = DownloadDirCache()
+
+                recent = cache.get_recent(10)
+                assert len(recent) == 0

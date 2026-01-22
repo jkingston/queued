@@ -11,7 +11,7 @@ from textual.containers import Container, Horizontal, Vertical
 from textual.screen import ModalScreen
 from textual.widgets import Button, Checkbox, Footer, Header, Input, Label
 
-from queued.config import HostCache, QueueCache, SettingsManager
+from queued.config import DownloadDirCache, HostCache, QueueCache, SettingsManager
 from queued.models import Host, RemoteFile, Transfer
 from queued.sftp import SFTPClient, SFTPConnectionPool, SFTPError
 from queued.transfer import TransferManager
@@ -484,6 +484,113 @@ class DownloadDirModal(NavigableModalScreen[Optional[str]]):
         self.dismiss(None)
 
 
+class DirectorySelectorModal(NavigableModalScreen[Optional[str]]):
+    """Modal for selecting download directory from history or custom path."""
+
+    BINDINGS = [
+        *NavigableModalScreen.BINDINGS,
+        Binding("escape", "cancel", "Cancel"),
+    ]
+
+    DEFAULT_CSS = """
+    DirectorySelectorModal {
+        align: center middle;
+    }
+
+    DirectorySelectorModal > Container {
+        width: 70;
+        height: auto;
+        background: $surface;
+        border: thick $primary;
+        padding: 1 2;
+    }
+
+    DirectorySelectorModal .modal-title {
+        text-align: center;
+        text-style: bold;
+        margin-bottom: 1;
+    }
+
+    DirectorySelectorModal .recent-dir-btn {
+        width: 100%;
+        margin: 0 0 1 0;
+    }
+
+    DirectorySelectorModal .field-label {
+        margin-top: 1;
+        height: 1;
+    }
+
+    DirectorySelectorModal Input {
+        margin-bottom: 1;
+    }
+
+    DirectorySelectorModal .button-row {
+        margin-top: 1;
+        height: auto;
+        align: center middle;
+    }
+
+    DirectorySelectorModal Button {
+        margin: 0 1;
+    }
+    """
+
+    def __init__(self, current_dir: str, recent_dirs: list[str]) -> None:
+        super().__init__()
+        self.current_dir = current_dir
+        self.recent_dirs = recent_dirs
+        self.selected_dir = current_dir
+
+    def compose(self) -> ComposeResult:
+        with Container():
+            yield Label("Select Download Directory", classes="modal-title")
+
+            # Recent directories
+            if self.recent_dirs:
+                yield Label("Recent Directories:", classes="field-label")
+                for i, dir_path in enumerate(self.recent_dirs):
+                    # Mark current directory
+                    label = dir_path
+                    if dir_path == self.current_dir:
+                        label += " ✓"
+                    yield Button(label, id=f"recent-dir-{i}", classes="recent-dir-btn")
+
+            # Custom path entry
+            yield Label("Or enter custom path (~ expands to home):", classes="field-label")
+            yield Input(placeholder="~/custom/path", id="custom-dir-input")
+
+            # Action buttons
+            with Horizontal(classes="button-row"):
+                yield Button("Select", variant="primary", id="select-btn")
+                yield Button("Cancel", id="cancel-btn")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        # Handle recent directory button clicks
+        if event.button.id and event.button.id.startswith("recent-dir-"):
+            idx = int(event.button.id.split("-")[2])
+            self.selected_dir = self.recent_dirs[idx]
+            # Dismiss with the selected directory
+            self.dismiss(self.selected_dir)
+            return
+
+        # Handle Select button
+        if event.button.id == "select-btn":
+            # Check if custom path was entered
+            custom_input = self.query_one("#custom-dir-input", Input)
+            if custom_input.value.strip():
+                self.dismiss(custom_input.value.strip())
+            else:
+                self.dismiss(self.selected_dir)
+
+        # Handle Cancel button
+        elif event.button.id == "cancel-btn":
+            self.dismiss(None)
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
 class SettingsModal(NavigableModalScreen[Optional[int]]):
     """Modal for configuring application settings."""
 
@@ -531,6 +638,11 @@ class SettingsModal(NavigableModalScreen[Optional[int]]):
         align: center middle;
         height: auto;
     }
+
+    SettingsModal .change-dir-btn {
+        width: 100%;
+        margin: 1 0;
+    }
     """
 
     def __init__(
@@ -560,12 +672,34 @@ class SettingsModal(NavigableModalScreen[Optional[int]]):
                 yield Label("Download Directory:", classes="setting-label")
                 yield Label(self.current_download_dir, id="download-dir-display")
 
+            # Add "Change Directory..." button
+            yield Button("Change Directory...", id="change-dir-btn", classes="change-dir-btn")
+
             # Buttons
             with Horizontal(classes="button-row"):
                 yield Button("Save", variant="primary", id="save-btn")
                 yield Button("Cancel", id="cancel-btn")
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
+        # Handle "Change Directory..." button
+        if event.button.id == "change-dir-btn":
+            # Get app instance to access download_dir_cache
+            app = self.app
+            if hasattr(app, "download_dir_cache"):
+                recent_dirs = app.download_dir_cache.get_recent(6)
+            else:
+                recent_dirs = []
+
+            # Open directory selector modal
+            self.app.push_screen(
+                DirectorySelectorModal(
+                    current_dir=self.current_download_dir, recent_dirs=recent_dirs
+                ),
+                self._on_directory_selected,
+            )
+            return
+
+        # Handle Save button
         if event.button.id == "save-btn":
             max_concurrent_input = self.query_one("#max-concurrent-input", Input)
             try:
@@ -580,6 +714,19 @@ class SettingsModal(NavigableModalScreen[Optional[int]]):
                 max_concurrent_input.value = str(self.current_max_concurrent)
         else:
             self.dismiss(None)
+
+    def _on_directory_selected(self, directory: str | None) -> None:
+        """Handle directory selection from DirectorySelectorModal."""
+        if directory:
+            # Call app method to update and validate
+            app = self.app
+            if hasattr(app, "update_download_directory"):
+                success = app.update_download_directory(directory)
+                if success:
+                    # Update the display in this modal
+                    label = self.query_one("#download-dir-display", Label)
+                    label.update(directory)
+                    self.current_download_dir = directory
 
     def action_cancel(self) -> None:
         self.dismiss(None)
@@ -796,6 +943,7 @@ class QueuedApp(App):
         self.host_cache = HostCache()
         self.settings_manager = SettingsManager()
         self.queue_cache = QueueCache()
+        self.download_dir_cache = DownloadDirCache()
         self.connection_pool = SFTPConnectionPool(self.host_cache)
         self._transfer_task: asyncio.Task | None = None
         self._refresh_timer: asyncio.Task | None = None
@@ -804,6 +952,7 @@ class QueuedApp(App):
         # Override download dir if provided via CLI
         if download_dir:
             self.settings_manager.update(download_dir=download_dir)
+            self.download_dir_cache.add(download_dir)
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -1219,6 +1368,41 @@ class QueuedApp(App):
             status_bar = self.query_one("#status-bar", StatusBar)
             status_bar.set_download_dir(path)
             status_bar.show_message(f"Download dir: {path}")
+
+    def update_download_directory(self, directory: str) -> bool:
+        """Update the download directory and add to history.
+
+        Called when user selects a directory from DirectorySelectorModal.
+
+        Returns:
+            True if successful, False if validation failed
+        """
+        status_bar = self.query_one("#status-bar", StatusBar)
+
+        # Don't update if it's the same as current
+        if directory == self.settings_manager.settings.download_dir:
+            return True
+
+        # Validate and create if needed
+        expanded = Path(directory).expanduser()
+        if not expanded.exists():
+            try:
+                expanded.mkdir(parents=True, exist_ok=True)
+            except OSError as e:
+                status_bar.show_message(f"Invalid path: {e}", error=True)
+                return False
+
+        # Update settings
+        self.settings_manager.update(download_dir=directory)
+
+        # Add to history (deduplicates automatically)
+        self.download_dir_cache.add(directory)
+
+        # Update status bar
+        status_bar.set_download_dir(directory)
+        status_bar.show_message(f"Download directory: {directory}")
+
+        return True
 
     def _on_settings_result(self, max_concurrent: int | None) -> None:
         """Handle settings modal result."""

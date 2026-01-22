@@ -88,6 +88,50 @@ class HostCache:
         return None
 
 
+class DownloadDirCache:
+    """Manages recently used download directories."""
+
+    def __init__(self, max_dirs: int = 6):
+        self.max_dirs = max_dirs
+        self.cache_file = get_cache_dir() / "download_dirs.json"
+        self._dirs: list[str] = []
+        self._load()
+
+    def _load(self) -> None:
+        """Load directories from cache file."""
+        if self.cache_file.exists():
+            try:
+                data = json.loads(self.cache_file.read_text())
+                self._dirs = data.get("dirs", [])
+            except (json.JSONDecodeError, KeyError):
+                self._dirs = []
+
+    def _save(self) -> None:
+        """Save directories to cache file."""
+        data = {"dirs": self._dirs}
+        _secure_write(self.cache_file, json.dumps(data, indent=2))
+
+    def add(self, directory: str) -> None:
+        """Add directory to cache.
+
+        - Removes existing entry (deduplication)
+        - Adds to front of list
+        - Trims to max_dirs
+        - Saves immediately
+        """
+        # Remove if exists
+        self._dirs = [d for d in self._dirs if d != directory]
+        # Add to front
+        self._dirs.insert(0, directory)
+        # Trim to max
+        self._dirs = self._dirs[: self.max_dirs]
+        self._save()
+
+    def get_recent(self, limit: int = 6) -> list[str]:
+        """Get recently used directories."""
+        return self._dirs[:limit]
+
+
 class TransferStateCache:
     """Manages transfer state for resume support."""
 
