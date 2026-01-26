@@ -116,6 +116,7 @@ class SFTPClient:
 
             if self.host.key_path:
                 connect_kwargs["client_keys"] = [self.host.key_path]
+                connect_kwargs["agent_path"] = None  # Don't use SSH agent, only the specified key
                 logger.debug("Using SSH key: %s", self.host.key_path)
             elif self.host.password:
                 connect_kwargs["password"] = self.host.password
