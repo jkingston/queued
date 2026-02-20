@@ -299,7 +299,7 @@ class FileExistsModal(NavigableModalScreen[Optional[str]]):
         remote_size: int,
         remote_path: str | None = None,
         local_path: str | None = None,
-        sftp: "SFTPClient | None" = None,
+        sftp: SFTPClient | None = None,
     ) -> None:
         super().__init__()
         self.filename = filename
@@ -1416,9 +1416,7 @@ class QueuedApp(App):
 
             # Show confirmation in status bar
             status_bar = self.query_one("#status-bar", StatusBar)
-            status_bar.show_message(
-                f"Settings saved: max concurrent transfers = {max_concurrent}"
-            )
+            status_bar.show_message(f"Settings saved: max concurrent transfers = {max_concurrent}")
 
     async def action_quit(self) -> None:
         """Quit the application - stop active transfers (they resume on restart)."""

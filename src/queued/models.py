@@ -41,7 +41,7 @@ class Host:
     @classmethod
     def from_string(
         cls, connection_string: str, port: int = 22, key_path: str | None = None
-    ) -> "Host":
+    ) -> Host:
         """Parse user@host connection string."""
         if "@" in connection_string:
             username, hostname = connection_string.split("@", 1)
@@ -68,7 +68,7 @@ class Host:
         return d
 
     @classmethod
-    def from_dict(cls, data: dict) -> "Host":
+    def from_dict(cls, data: dict) -> Host:
         """Create from dictionary."""
         import base64
 
@@ -216,7 +216,7 @@ class Transfer:
         }
 
     @classmethod
-    def from_dict(cls, data: dict) -> "Transfer":
+    def from_dict(cls, data: dict) -> Transfer:
         """Create from dictionary."""
         return cls(
             id=data["id"],
@@ -364,7 +364,7 @@ class AppSettings:
         }
 
     @classmethod
-    def from_dict(cls, data: dict) -> "AppSettings":
+    def from_dict(cls, data: dict) -> AppSettings:
         """Create from dictionary."""
         return cls(
             max_concurrent_transfers=data.get("max_concurrent_transfers", 10),
