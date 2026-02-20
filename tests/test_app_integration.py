@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 from textual.app import App, ComposeResult
-from textual.widgets import Button
+from textual.widgets import Button, Checkbox
 
 from queued.app import FileExistsModal
 from queued.models import RemoteFile
@@ -291,9 +291,9 @@ class TestFileExistsModalVerify:
 
                 # Replace and Cancel should still be enabled
                 replace_btn = app.modal.query_one("#replace-btn", Button)
-                cancel_btn = app.modal.query_one("#cancel-btn", Button)
+                skip_btn = app.modal.query_one("#skip-btn", Button)
                 assert not replace_btn.disabled
-                assert not cancel_btn.disabled
+                assert not skip_btn.disabled
 
 
 class TestVerifyE2E:
@@ -340,8 +340,8 @@ class TestVerifyE2E:
                 assert "MD5 match" in str(result_label.content)
 
                 # 4. Cancel button still available
-                cancel_btn = app.modal.query_one("#cancel-btn", Button)
-                assert not cancel_btn.disabled
+                skip_btn = app.modal.query_one("#skip-btn", Button)
+                assert not skip_btn.disabled
 
                 # 5. Original file still exists unchanged
                 assert local_path.exists()
@@ -486,9 +486,9 @@ class TestVerifyErrorHandling:
 
                 # Buttons should still work
                 replace_btn = app.modal.query_one("#replace-btn", Button)
-                cancel_btn = app.modal.query_one("#cancel-btn", Button)
+                skip_btn = app.modal.query_one("#skip-btn", Button)
                 assert not replace_btn.disabled
-                assert not cancel_btn.disabled
+                assert not skip_btn.disabled
 
     @pytest.mark.asyncio
     async def test_verify_fallback_when_md5_fails_but_sizes_match(self):
@@ -680,3 +680,464 @@ class TestQueuedAppInitialHost:
 
                 # App should have mounted successfully
                 assert app.is_running
+
+
+class TestVerifySizeButton:
+    """Tests for the Verify Size button in FileExistsModal."""
+
+    @pytest.mark.asyncio
+    async def test_verify_size_button_shown_when_file_complete(self):
+        """Verify Size button should appear when local_size >= remote_size and sftp provided."""
+        mock_sftp = MockSFTPClient()
+
+        modal = FileExistsModal(
+            "file.txt",
+            local_size=1000,
+            remote_size=1000,
+            remote_path="/remote/file.txt",
+            local_path="/local/file.txt",
+            sftp=mock_sftp,
+        )
+
+        app = FileExistsModalTestApp(modal)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            verify_size_btns = app.modal.query("#verify-size-btn")
+            assert len(verify_size_btns) == 1, (
+                "Verify Size button should be shown for complete file"
+            )
+
+    @pytest.mark.asyncio
+    async def test_verify_size_button_hidden_when_file_partial(self):
+        """Verify Size button should not appear when local_size < remote_size."""
+        mock_sftp = MockSFTPClient()
+
+        modal = FileExistsModal(
+            "file.txt",
+            local_size=500,
+            remote_size=1000,
+            remote_path="/remote/file.txt",
+            local_path="/local/file.txt",
+            sftp=mock_sftp,
+        )
+
+        app = FileExistsModalTestApp(modal)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            verify_size_btns = app.modal.query("#verify-size-btn")
+            assert len(verify_size_btns) == 0, (
+                "Verify Size button should not be shown for partial file"
+            )
+
+    @pytest.mark.asyncio
+    async def test_verify_size_button_hidden_without_sftp(self):
+        """Verify Size button should not appear when sftp client not provided."""
+        modal = FileExistsModal(
+            "file.txt",
+            local_size=1000,
+            remote_size=1000,
+        )
+
+        app = FileExistsModalTestApp(modal)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            verify_size_btns = app.modal.query("#verify-size-btn")
+            assert len(verify_size_btns) == 0, "Verify Size button requires sftp client"
+
+    @pytest.mark.asyncio
+    async def test_verify_size_shows_match(self):
+        """Clicking Verify Size should show 'Sizes match' when sizes are equal."""
+        mock_sftp = MockSFTPClient()
+
+        modal = FileExistsModal(
+            "file.txt",
+            local_size=1000,
+            remote_size=1000,
+            remote_path="/remote/file.txt",
+            local_path="/local/file.txt",
+            sftp=mock_sftp,
+        )
+
+        app = FileExistsModalTestApp(modal)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            verify_size_btn = app.modal.query_one("#verify-size-btn", Button)
+            await pilot.click(verify_size_btn)
+            await pilot.pause()
+
+            result_label = app.modal.query_one("#verify-result")
+            assert "Sizes match" in str(result_label.content)
+
+    @pytest.mark.asyncio
+    async def test_verify_size_shows_mismatch(self):
+        """Clicking Verify Size should show mismatch when sizes differ."""
+        mock_sftp = MockSFTPClient()
+
+        # local_size > remote_size (can_verify is true, can_continue is false)
+        modal = FileExistsModal(
+            "file.txt",
+            local_size=2000,
+            remote_size=1000,
+            remote_path="/remote/file.txt",
+            local_path="/local/file.txt",
+            sftp=mock_sftp,
+        )
+
+        app = FileExistsModalTestApp(modal)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            verify_size_btn = app.modal.query_one("#verify-size-btn", Button)
+            await pilot.click(verify_size_btn)
+            await pilot.pause()
+
+            result_label = app.modal.query_one("#verify-result")
+            assert "Size mismatch" in str(result_label.content)
+
+
+class TestApplyToAllCheckbox:
+    """Tests for the Apply to All checkbox in FileExistsModal."""
+
+    @pytest.mark.asyncio
+    async def test_apply_all_checkbox_exists(self):
+        """Apply to all checkbox should be present in the modal."""
+        mock_sftp = MockSFTPClient()
+
+        modal = FileExistsModal(
+            "file.txt",
+            local_size=1000,
+            remote_size=1000,
+            remote_path="/remote/file.txt",
+            local_path="/local/file.txt",
+            sftp=mock_sftp,
+        )
+
+        app = FileExistsModalTestApp(modal)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            checkboxes = app.modal.query("#apply-all-checkbox")
+            assert len(checkboxes) == 1, "Apply to all checkbox should exist"
+
+    @pytest.mark.asyncio
+    async def test_skip_without_apply_all_returns_none(self):
+        """Skip without apply-all should dismiss with None."""
+        mock_sftp = MockSFTPClient()
+
+        modal = FileExistsModal(
+            "file.txt",
+            local_size=1000,
+            remote_size=1000,
+            remote_path="/remote/file.txt",
+            local_path="/local/file.txt",
+            sftp=mock_sftp,
+        )
+
+        results = []
+
+        app = FileExistsModalTestApp(modal)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+
+            # Override dismiss to capture result
+            original_dismiss = modal.dismiss
+
+            def capture_dismiss(result=None):
+                results.append(result)
+                original_dismiss(result)
+
+            modal.dismiss = capture_dismiss
+
+            skip_btn = app.modal.query_one("#skip-btn", Button)
+            await pilot.click(skip_btn)
+            await pilot.pause()
+
+            assert results == [None]
+
+    @pytest.mark.asyncio
+    async def test_skip_with_apply_all_returns_skip_all(self):
+        """Skip with apply-all checked should dismiss with 'skip_all'."""
+        mock_sftp = MockSFTPClient()
+
+        modal = FileExistsModal(
+            "file.txt",
+            local_size=1000,
+            remote_size=1000,
+            remote_path="/remote/file.txt",
+            local_path="/local/file.txt",
+            sftp=mock_sftp,
+        )
+
+        results = []
+
+        app = FileExistsModalTestApp(modal)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+
+            # Check the apply-all checkbox
+            checkbox = app.modal.query_one("#apply-all-checkbox", Checkbox)
+            checkbox.value = True
+            await pilot.pause()
+
+            # Override dismiss to capture result
+            original_dismiss = modal.dismiss
+
+            def capture_dismiss(result=None):
+                results.append(result)
+                original_dismiss(result)
+
+            modal.dismiss = capture_dismiss
+
+            skip_btn = app.modal.query_one("#skip-btn", Button)
+            await pilot.click(skip_btn)
+            await pilot.pause()
+
+            assert results == ["skip_all"]
+
+    @pytest.mark.asyncio
+    async def test_replace_with_apply_all_returns_replace_all(self):
+        """Replace with apply-all checked should dismiss with 'replace_all'."""
+        mock_sftp = MockSFTPClient()
+
+        modal = FileExistsModal(
+            "file.txt",
+            local_size=1000,
+            remote_size=1000,
+            remote_path="/remote/file.txt",
+            local_path="/local/file.txt",
+            sftp=mock_sftp,
+        )
+
+        results = []
+
+        app = FileExistsModalTestApp(modal)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+
+            # Check the apply-all checkbox
+            checkbox = app.modal.query_one("#apply-all-checkbox", Checkbox)
+            checkbox.value = True
+            await pilot.pause()
+
+            original_dismiss = modal.dismiss
+
+            def capture_dismiss(result=None):
+                results.append(result)
+                original_dismiss(result)
+
+            modal.dismiss = capture_dismiss
+
+            replace_btn = app.modal.query_one("#replace-btn", Button)
+            await pilot.click(replace_btn)
+            await pilot.pause()
+
+            assert results == ["replace_all"]
+
+    @pytest.mark.asyncio
+    async def test_continue_with_apply_all_returns_continue_all(self):
+        """Continue with apply-all checked should dismiss with 'continue_all'."""
+        mock_sftp = MockSFTPClient()
+
+        # Partial file so Continue button appears
+        modal = FileExistsModal(
+            "file.txt",
+            local_size=500,
+            remote_size=1000,
+            remote_path="/remote/file.txt",
+            local_path="/local/file.txt",
+            sftp=mock_sftp,
+        )
+
+        results = []
+
+        app = FileExistsModalTestApp(modal)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+
+            checkbox = app.modal.query_one("#apply-all-checkbox", Checkbox)
+            checkbox.value = True
+            await pilot.pause()
+
+            original_dismiss = modal.dismiss
+
+            def capture_dismiss(result=None):
+                results.append(result)
+                original_dismiss(result)
+
+            modal.dismiss = capture_dismiss
+
+            continue_btn = app.modal.query_one("#continue-btn", Button)
+            await pilot.click(continue_btn)
+            await pilot.pause()
+
+            assert results == ["continue_all"]
+
+    @pytest.mark.asyncio
+    async def test_verify_size_with_apply_all_dismisses(self):
+        """Verify Size with apply-all checked should dismiss with 'verify_size_all'."""
+        mock_sftp = MockSFTPClient()
+
+        modal = FileExistsModal(
+            "file.txt",
+            local_size=1000,
+            remote_size=1000,
+            remote_path="/remote/file.txt",
+            local_path="/local/file.txt",
+            sftp=mock_sftp,
+        )
+
+        results = []
+
+        app = FileExistsModalTestApp(modal)
+        async with app.run_test() as pilot:
+            await pilot.pause()
+
+            checkbox = app.modal.query_one("#apply-all-checkbox", Checkbox)
+            checkbox.value = True
+            await pilot.pause()
+
+            original_dismiss = modal.dismiss
+
+            def capture_dismiss(result=None):
+                results.append(result)
+                original_dismiss(result)
+
+            modal.dismiss = capture_dismiss
+
+            verify_size_btn = app.modal.query_one("#verify-size-btn", Button)
+            await pilot.click(verify_size_btn)
+            await pilot.pause()
+
+            assert results == ["verify_size_all"]
+
+
+class TestAutoApplyExistsAction:
+    """Tests for _auto_apply_exists_action logic via _add_download_with_exists_check."""
+
+    @pytest.mark.asyncio
+    async def test_auto_skip_returns_cancelled(self):
+        """apply_all_action='skip' should return cancelled without showing modal."""
+        from unittest.mock import AsyncMock, patch
+
+        from queued.app import QueuedApp
+        from queued.models import Host
+
+        mock_host = Host(hostname="test.example.com", username="testuser", port=22)
+
+        with (
+            patch("queued.app.SFTPClient") as mock_sftp_class,
+            tempfile.TemporaryDirectory() as tmpdir,
+        ):
+            mock_sftp = AsyncMock()
+            mock_sftp.connected = True
+            mock_sftp.list_dir = AsyncMock(return_value=[])
+            mock_sftp.get_pwd = AsyncMock(return_value="/")
+            mock_sftp_class.return_value = mock_sftp
+
+            app = QueuedApp(host=mock_host, download_dir=tmpdir)
+            async with app.run_test() as pilot:
+                await pilot.pause()
+
+                # Create a local file that "already exists"
+                local_file = Path(tmpdir) / "existing.txt"
+                local_file.write_bytes(b"existing content")
+
+                remote_file = RemoteFile(
+                    name="existing.txt",
+                    path="/remote/existing.txt",
+                    size=16,
+                    is_dir=False,
+                    mtime=None,
+                )
+
+                result, new_action = await app._add_download_with_exists_check(
+                    remote_file, apply_all_action="skip"
+                )
+                assert result == "cancelled"
+                assert new_action == "skip"
+
+    @pytest.mark.asyncio
+    async def test_auto_verify_size_match_returns_verified(self):
+        """apply_all_action='verify_size' with matching sizes should return 'verified'."""
+        from unittest.mock import AsyncMock, patch
+
+        from queued.app import QueuedApp
+        from queued.models import Host
+
+        mock_host = Host(hostname="test.example.com", username="testuser", port=22)
+
+        with (
+            patch("queued.app.SFTPClient") as mock_sftp_class,
+            tempfile.TemporaryDirectory() as tmpdir,
+        ):
+            mock_sftp = AsyncMock()
+            mock_sftp.connected = True
+            mock_sftp.list_dir = AsyncMock(return_value=[])
+            mock_sftp.get_pwd = AsyncMock(return_value="/")
+            mock_sftp_class.return_value = mock_sftp
+
+            app = QueuedApp(host=mock_host, download_dir=tmpdir)
+            async with app.run_test() as pilot:
+                await pilot.pause()
+
+                # Create local file with matching size
+                content = b"matching content!"  # 17 bytes
+                local_file = Path(tmpdir) / "match.txt"
+                local_file.write_bytes(content)
+
+                remote_file = RemoteFile(
+                    name="match.txt",
+                    path="/remote/match.txt",
+                    size=len(content),
+                    is_dir=False,
+                    mtime=None,
+                )
+
+                result, new_action = await app._add_download_with_exists_check(
+                    remote_file, apply_all_action="verify_size"
+                )
+                assert result == "verified"
+                assert new_action == "verify_size"
+
+    @pytest.mark.asyncio
+    async def test_auto_verify_size_mismatch_replaces(self):
+        """apply_all_action='verify_size' with mismatched sizes should delete and re-queue."""
+        from unittest.mock import AsyncMock, patch
+
+        from queued.app import QueuedApp
+        from queued.models import Host
+
+        mock_host = Host(hostname="test.example.com", username="testuser", port=22)
+
+        with (
+            patch("queued.app.SFTPClient") as mock_sftp_class,
+            tempfile.TemporaryDirectory() as tmpdir,
+        ):
+            mock_sftp = AsyncMock()
+            mock_sftp.connected = True
+            mock_sftp.list_dir = AsyncMock(return_value=[])
+            mock_sftp.get_pwd = AsyncMock(return_value="/")
+            mock_sftp_class.return_value = mock_sftp
+
+            app = QueuedApp(host=mock_host, download_dir=tmpdir)
+            async with app.run_test() as pilot:
+                await pilot.pause()
+
+                # Create local file with DIFFERENT size
+                local_file = Path(tmpdir) / "mismatch.txt"
+                local_file.write_bytes(b"short")  # 5 bytes
+
+                remote_file = RemoteFile(
+                    name="mismatch.txt",
+                    path="/remote/mismatch.txt",
+                    size=1000,  # Different from local
+                    is_dir=False,
+                    mtime=None,
+                )
+
+                result, new_action = await app._add_download_with_exists_check(
+                    remote_file, apply_all_action="verify_size"
+                )
+                # File should be deleted and queued (or skipped if queue is not set up)
+                assert result in ("added", "skipped", "cancelled")
+                assert new_action == "verify_size"
+                # Local file should have been deleted
+                assert not local_file.exists()

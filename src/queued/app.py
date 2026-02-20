@@ -290,6 +290,12 @@ class FileExistsModal(NavigableModalScreen[Optional[str]]):
     FileExistsModal Button {
         margin: 0 1;
     }
+
+    FileExistsModal #apply-all-checkbox {
+        margin-top: 1;
+        width: auto;
+        align: center middle;
+    }
     """
 
     def __init__(
@@ -336,9 +342,12 @@ class FileExistsModal(NavigableModalScreen[Optional[str]]):
                 if self.can_continue:
                     yield Button("Continue", variant="primary", id="continue-btn")
                 if self.can_verify:
-                    yield Button("Verify", variant="default", id="verify-btn")
+                    yield Button("Verify Hash", variant="default", id="verify-btn")
+                    yield Button("Verify Size", variant="default", id="verify-size-btn")
                 yield Button("Replace", variant="warning", id="replace-btn")
-                yield Button("Cancel", id="cancel-btn")
+                yield Button("Skip", id="skip-btn")
+
+            yield Checkbox("Apply to all", id="apply-all-checkbox")
 
     def _format_size(self, size: int) -> str:
         """Format size in human-readable format."""
@@ -350,15 +359,44 @@ class FileExistsModal(NavigableModalScreen[Optional[str]]):
             size_float /= 1024
         return f"{size_float:.1f} {units[-1]}"
 
+    def _apply_all_checked(self) -> bool:
+        """Check if the 'Apply to all' checkbox is checked."""
+        return self.query_one("#apply-all-checkbox", Checkbox).value
+
+    def _dismiss_with_apply_all(self, action: str) -> None:
+        """Dismiss with _all suffix if checkbox is checked."""
+        if self._apply_all_checked():
+            self.dismiss(f"{action}_all")
+        else:
+            self.dismiss(action)
+
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "continue-btn":
-            self.dismiss("continue")
+            self._dismiss_with_apply_all("continue")
         elif event.button.id == "replace-btn":
-            self.dismiss("replace")
+            self._dismiss_with_apply_all("replace")
         elif event.button.id == "verify-btn":
             self._start_verification()
+        elif event.button.id == "verify-size-btn":
+            self._do_verify_size()
+        elif event.button.id == "skip-btn":
+            if self._apply_all_checked():
+                self.dismiss("skip_all")
+            else:
+                self.dismiss(None)
+
+    def _do_verify_size(self) -> None:
+        """Perform instant size comparison."""
+        if self._apply_all_checked():
+            self.dismiss("verify_size_all")
+        elif self.local_size == self.remote_size:
+            self._update_verify_ui("Sizes match", "success")
         else:
-            self.dismiss(None)
+            self._update_verify_ui(
+                f"Size mismatch: local {self._format_size(self.local_size)} "
+                f"vs remote {self._format_size(self.remote_size)}",
+                "error",
+            )
 
     def _start_verification(self) -> None:
         """Start async verification."""
@@ -406,7 +444,10 @@ class FileExistsModal(NavigableModalScreen[Optional[str]]):
             button.disabled = disabled
 
     def action_cancel(self) -> None:
-        self.dismiss(None)
+        if self._apply_all_checked():
+            self.dismiss("skip_all")
+        else:
+            self.dismiss(None)
 
 
 class DownloadDirModal(NavigableModalScreen[Optional[str]]):
@@ -1177,6 +1218,8 @@ class QueuedApp(App):
         count = 0
         skipped = 0
         cancelled = 0
+        verified = 0
+        apply_all_action: str | None = None
 
         for f in files:
             if f.is_dir:
@@ -1185,26 +1228,36 @@ class QueuedApp(App):
                 # Recursively get all files in directory
                 dir_files = await self._list_dir_recursive(f.path)
                 for df in dir_files:
-                    result = await self._add_download_with_exists_check(df, base_dir)
+                    result, apply_all_action = await self._add_download_with_exists_check(
+                        df, base_dir, apply_all_action
+                    )
                     if result == "added":
                         count += 1
                     elif result == "skipped":
                         skipped += 1
+                    elif result == "verified":
+                        verified += 1
                     else:  # cancelled
                         cancelled += 1
             else:
-                result = await self._add_download_with_exists_check(f)
+                result, apply_all_action = await self._add_download_with_exists_check(
+                    f, apply_all_action=apply_all_action
+                )
                 if result == "added":
                     count += 1
                 elif result == "skipped":
                     skipped += 1
+                elif result == "verified":
+                    verified += 1
                 else:  # cancelled
                     cancelled += 1
 
-        if count > 0 or skipped > 0 or cancelled > 0:
+        if count > 0 or skipped > 0 or cancelled > 0 or verified > 0:
             parts = []
             if count > 0:
                 parts.append(f"Queued {count}")
+            if verified > 0:
+                parts.append(f"{verified} verified")
             if skipped > 0:
                 parts.append(f"{skipped} already queued")
             if cancelled > 0:
@@ -1219,18 +1272,24 @@ class QueuedApp(App):
         file_browser.refresh_directory()
 
     async def _add_download_with_exists_check(
-        self, f: RemoteFile, base_dir: str | None = None
-    ) -> str:
+        self,
+        f: RemoteFile,
+        base_dir: str | None = None,
+        apply_all_action: str | None = None,
+    ) -> tuple[str, str | None]:
         """Add a file to download queue, checking if local file exists.
 
         Args:
             f: The remote file to download
             base_dir: Base directory for preserving folder structure
+            apply_all_action: Action to auto-apply (skip, replace, continue, verify_size)
 
         Returns:
+            Tuple of (outcome, new_apply_all_action) where outcome is one of:
             "added" - file was added to queue
             "skipped" - file was already in queue
             "cancelled" - user cancelled the action
+            "verified" - file skipped because size verification passed
         """
         status_bar = self.query_one("#status-bar", StatusBar)
 
@@ -1238,6 +1297,12 @@ class QueuedApp(App):
         local_path = self._compute_local_path(f, base_dir)
         if local_path.exists():
             local_size = local_path.stat().st_size
+
+            # Auto-apply if apply_all_action is set
+            if apply_all_action is not None:
+                return self._auto_apply_exists_action(
+                    apply_all_action, local_path, local_size, f, base_dir
+                )
 
             # Show modal and wait for user decision
             result = await self.push_screen_wait(
@@ -1251,6 +1316,12 @@ class QueuedApp(App):
                 )
             )
 
+            # Check for _all suffix → extract action and set apply_all_action
+            if result and result.endswith("_all"):
+                action = result.removesuffix("_all")
+                apply_all_action = action
+                result = action
+
             if result == "continue":
                 # Resume - add to queue, existing partial file will be used
                 pass
@@ -1260,10 +1331,21 @@ class QueuedApp(App):
                     local_path.unlink()
                 except OSError as e:
                     status_bar.show_message(f"Error deleting file: {e}", error=True)
-                    return "cancelled"
+                    return ("cancelled", apply_all_action)
+            elif result == "verify_size":
+                # Apply size verification to the first file too
+                if local_size == f.size:
+                    return ("verified", apply_all_action)
+                else:
+                    # Size mismatch - replace
+                    try:
+                        local_path.unlink()
+                    except OSError as e:
+                        status_bar.show_message(f"Error deleting file: {e}", error=True)
+                        return ("cancelled", apply_all_action)
             else:
-                # Cancel - skip this file
-                return "cancelled"
+                # Cancel/skip - skip this file
+                return ("cancelled", apply_all_action)
 
         # Add to queue
         try:
@@ -1271,12 +1353,66 @@ class QueuedApp(App):
                 f, host=self._current_host, base_dir=base_dir
             )
             if transfer:
-                return "added"
+                return ("added", apply_all_action)
             else:
-                return "skipped"  # Already in queue
+                return ("skipped", apply_all_action)  # Already in queue
         except Exception as e:
             status_bar.show_message(f"Error: {e}", error=True)
-            return "cancelled"
+            return ("cancelled", apply_all_action)
+
+    def _auto_apply_exists_action(
+        self,
+        action: str,
+        local_path: Path,
+        local_size: int,
+        f: RemoteFile,
+        base_dir: str | None,
+    ) -> tuple[str, str | None]:
+        """Auto-apply an action for a file that already exists locally.
+
+        Returns:
+            Tuple of (outcome, apply_all_action) - action is always preserved.
+        """
+        status_bar = self.query_one("#status-bar", StatusBar)
+
+        if action == "skip":
+            return ("cancelled", action)
+        elif action == "replace":
+            try:
+                local_path.unlink()
+            except OSError as e:
+                status_bar.show_message(f"Error deleting file: {e}", error=True)
+                return ("cancelled", action)
+            # Fall through to add to queue below
+        elif action == "continue":
+            # Resume - fall through to add to queue
+            pass
+        elif action == "verify_size":
+            if local_size == f.size:
+                return ("verified", action)
+            else:
+                # Size mismatch - replace
+                try:
+                    local_path.unlink()
+                except OSError as e:
+                    status_bar.show_message(f"Error deleting file: {e}", error=True)
+                    return ("cancelled", action)
+                # Fall through to add to queue
+        else:
+            return ("cancelled", action)
+
+        # Add to queue
+        try:
+            transfer = self.transfer_manager.add_download(
+                f, host=self._current_host, base_dir=base_dir
+            )
+            if transfer:
+                return ("added", action)
+            else:
+                return ("skipped", action)
+        except Exception as e:
+            status_bar.show_message(f"Error: {e}", error=True)
+            return ("cancelled", action)
 
     async def _list_dir_recursive(self, path: str) -> list[RemoteFile]:
         """Recursively list all files in a directory."""
